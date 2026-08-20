@@ -45,7 +45,17 @@ interface FleetConfig {
 }
 
 const CONFIG_PATH = process.env.FLOTILLA_CONFIG ?? join(ROOT, "flotilla.config.json");
-const config: FleetConfig = await Bun.file(CONFIG_PATH).json();
+const config: FleetConfig = await Bun.file(CONFIG_PATH).json().catch((err) => {
+  const missing = (err as { code?: string }).code === "ENOENT";
+  console.error(
+    missing
+      ? `flotilla: no config at ${CONFIG_PATH}\n` +
+        `  cp flotilla.config.example.json flotilla.config.json   # then edit it\n` +
+        `  (or point $FLOTILLA_CONFIG somewhere else)`
+      : `flotilla: cannot read ${CONFIG_PATH}: ${err instanceof Error ? err.message : err}`,
+  );
+  process.exit(1);
+});
 
 // Defaults name what this author runs; nothing here is privileged, and a config
 // that lists cargo and aider instead is a first-class setup.
