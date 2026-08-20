@@ -1,0 +1,34 @@
+{
+  "port": 7799,
+  "poll_interval_s": 15,
+  "ssh_timeout_ms": 30000,
+  "idle_after_s": 90,
+  "sleep_delay_s": 15,
+  "session_idle_s": 3600,
+
+  "//server_url": "What clients elsewhere should call. Defaults to localhost:<port>.",
+  "server_url": "http://my-hub:7799",
+
+  "//watch": "counts is one pgrep per name (cheap, keep it long); sessions costs a ps and a cwd lookup per match (keep it short).",
+  "watch": {
+    "counts": ["dune", "cargo", "make", "ninja"],
+    "sessions": ["claude", "codex"]
+  },
+
+  "//machines": "One entry per physical machine. A machine with a 'local' endpoint is the one running the server. Dual-boot boxes list both sides: the Windows counter is host-wide truth (it includes the WSL2 VM), the WSL one is shown separately.",
+  "machines": [
+    {
+      "name": "my-hub",
+      "endpoints": [{ "id": "local", "kind": "unix", "local": true }]
+    },
+    {
+      "name": "workstation",
+      "endpoints": [
+        { "id": "wsl", "kind": "unix", "host": "workstation-wsl" },
+        { "id": "win", "kind": "windows", "host": "workstation-win" }
+      ],
+      "//wol": "Optional. MAC addresses of the machine's NICs, plus the LAN broadcast address to send magic packets to.",
+      "wol": { "macs": ["00:11:22:33:44:55"], "broadcast": "192.168.1.255" }
+    }
+  ]
+}

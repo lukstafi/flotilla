@@ -1,0 +1,4 @@
+# Your real config: machine names, MAC addresses, LAN topology.
+flotilla.config.json
+node_modules/
+*.log

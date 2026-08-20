@@ -1,0 +1,140 @@
+#!/usr/bin/env bun
+// Flotilla CLI — agent/human-friendly view of the dashboard.
+//   flotilla                  compact table
+//   flotilla --json           raw /api/fleet payload
+//   flotilla <machine>        one machine (table or --json)
+//   flotilla sleep <machine>  suspend the machine after the server's delay window
+//   flotilla cancel <machine> cancel a pending sleep
+//   flotilla wake <machine>   send Wake-on-LAN magic packets
+//
+// Server URL: $FLOTILLA_URL, else the config's server_url, else localhost:<port>.
+
+const CONFIG = process.env.FLOTILLA_CONFIG ?? new URL("../flotilla.config.json", import.meta.url).pathname;
+const config = await Bun.file(CONFIG).json().catch(() => ({ port: 7799, machines: [] }));
+const base = (process.env.FLOTILLA_URL ?? config.server_url ?? `http://localhost:${config.port ?? 7799}`)
+  .replace(/\/+$/, "");
+// The machine with a local endpoint is the one hosting the server — it cannot
+// wake itself through an HTTP call to a server that is down with it.
+const serverHost = config.machines?.find((m) => m.endpoints?.some((e) => e.local))?.name;
+const args = process.argv.slice(2);
+const asJson = args.includes("--json");
+
+// Wake the server's own host, or any machine while the server is down, by
+// relaying the magic-packet send through another awake fleet box over SSH.
+async function wakeViaRelay(machine) {
+  const cfg = config;
+  const target = cfg.machines.find((x) => x.name === machine);
+  if (!target?.wol) { console.error(`flotilla: no wol config for ${machine}`); process.exit(1); }
+  const relays = cfg.machines
+    .filter((x) => x.name !== machine)
+    .flatMap((x) => x.endpoints.filter((e) => e.kind === "unix" && !e.local).map((e) => e.host));
+  const py = `
+import socket, sys
+bcast = sys.argv[1]
+for mac in sys.argv[2:]:
+    payload = bytes.fromhex('ff'*6 + mac.replace(':','')*16)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    for port in (7, 9):
+        s.sendto(payload, (bcast, port))
+    s.close()
+print("sent")
+`;
+  for (const host of relays) {
+    const proc = Bun.spawn(
+      ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", host,
+       `python3 - ${target.wol.broadcast} ${target.wol.macs.join(" ")}`],
+      { stdin: Buffer.from(py), stdout: "pipe", stderr: "ignore" },
+    );
+    const out = await new Response(proc.stdout).text();
+    if ((await proc.exited) === 0 && out.includes("sent")) {
+      console.log(`${machine}: wake packets sent via ${host} to ${target.wol.macs.join(", ")} (allow up to a minute)`);
+      return;
+    }
+  }
+  console.error(`flotilla: no relay host reachable (tried ${relays.join(", ")})`);
+  process.exit(1);
+}
+
+if (["sleep", "cancel", "wake"].includes(args[0])) {
+  const machine = args[1];
+  if (!machine) { console.error(`flotilla: ${args[0]} needs a machine name`); process.exit(2); }
+  const route = { sleep: "sleep", cancel: "sleep-cancel", wake: "wake" }[args[0]];
+  let res;
+  try {
+    if (args[0] === "wake" && machine === serverHost) throw new Error("server host — relay");
+    res = await fetch(`${base}/api/${route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ machine }),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (err) {
+    if (args[0] === "wake") { await wakeViaRelay(machine); process.exit(0); }
+    console.error(`flotilla: cannot reach ${base}: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+  const out = await res.json();
+  if (!res.ok) { console.error(`flotilla: ${out.error ?? res.status}`); process.exit(1); }
+  console.log(out.sleep_at ? `${machine} sleeping at ${out.sleep_at} (cancel with: flotilla cancel ${machine})`
+    : out.sent ? `${machine}: wake packets sent to ${out.sent.join(", ")} (allow up to a minute)`
+    : out.cancelled ? `${machine}: sleep cancelled` : `${machine}: no pending sleep`);
+  process.exit(0);
+}
+
+const machine = args.find((a) => !a.startsWith("-"));
+
+const url = machine ? `${base}/api/fleet/${machine}` : `${base}/api/fleet`;
+let payload;
+try {
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  payload = await res.json();
+  if (!res.ok) throw new Error(payload.error ?? `HTTP ${res.status}`);
+} catch (err) {
+  console.error(`flotilla: cannot reach ${url}: ${err instanceof Error ? err.message : err}`);
+  console.error(`is the server running? (bun server.ts) — set FLOTILLA_URL to point elsewhere`);
+  process.exit(1);
+}
+
+if (asJson) {
+  console.log(JSON.stringify(payload, null, 2));
+  process.exit(0);
+}
+
+const machines = payload.machines ?? [payload];
+const pct = (v) => (v == null ? "–" : `${Math.round(v)}%`);
+
+for (const m of machines) {
+  const eps = Object.entries(m.endpoints);
+  const epOf = (id) => m.endpoints[id]?.ok ? m.endpoints[id] : null;
+  const primaryEp = epOf("local") || epOf("win") || epOf("wsl");
+  const primary = primaryEp?.data;
+  let gpu = null, gpuEp = null;
+  for (const [, ep] of eps) {
+    const g = ep.ok && ep.data?.gpu;
+    if (g && (!gpu || g.kind !== "windows")) { gpu = g; gpuEp = ep; }
+  }
+  const sum = (f) => eps.reduce((n, [, ep]) => n + (ep.ok ? f(ep.data) : 0), 0);
+  const watch = payload.watch ?? { counts: [], sessions: [] };
+  const counts = [
+    ...watch.counts.map((n) => `${n} ${sum((d) => d.counts?.[n] ?? 0)}`),
+    ...watch.sessions.map((n) => `${n} ${sum((d) => (d.sessions?.[n] ?? []).length)}`),
+  ].join("  ");
+  const avg5 = (ep, field) => {
+    const v = ep?.avg?.m5?.[field];
+    return v != null ? ` (5m ${pct(v)})` : "";
+  };
+  const gpuStr = gpu
+    ? `gpu ${pct(gpu.util_pct)}${avg5(gpuEp, "gpu_util_pct")}${gpu.mem_used_mb != null ? ` ${(gpu.mem_used_mb / 1024).toFixed(1)}G` : ""}`
+    : "gpu –";
+  console.log(`${m.name.padEnd(11)} cpu ${pct(primary?.cpu_pct).padStart(4)}${avg5(primaryEp, "cpu_pct").padEnd(9)}  ${gpuStr.padEnd(24)} ${counts}`);
+  for (const [id, ep] of eps) {
+    if (!ep.ok) { console.log(`  ! ${id} (${ep.host}): ${ep.error}`); continue; }
+    for (const [agent, list] of Object.entries(ep.data.sessions ?? {}))
+      for (const s of list) {
+        const idle = s.quiet_s != null && s.closable ? `  idle ${Math.round(s.quiet_s / 3600)}h` : "";
+        const gone = s.cwd_deleted ? "  [no worktree]" : "";
+        console.log(`  ${agent} pid ${s.pid} up ${s.etime || "?"}  ${s.title || s.cwd || s.cmd}${gone}${idle}`);
+      }
+  }
+}

@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flotilla</title>
+<style>
+  :root {
+    --bg: #17150f;
+    --card: #211e16;
+    --edge: #37321f;
+    --text: #f2ecdd;
+    --dim: #a89f88;
+    --accent: #f5c04a;
+    --ok: #9ed36a;
+    --warm: #f0954f;
+    --hot: #ef6a5a;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif;
+    padding: 22px; min-height: 100vh;
+  }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; }
+  h1 { font-size: 20px; letter-spacing: .04em; color: var(--accent); }
+  #meta { color: var(--dim); font-size: 12.5px; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--edge);
+    border-radius: 10px; padding: 16px 18px;
+  }
+  .card h2 { font-size: 17px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .eps { margin-left: auto; display: flex; gap: 6px; }
+  .ep {
+    font: 10.5px var(--mono); padding: 1px 7px; border-radius: 9px;
+    border: 1px solid var(--edge); color: var(--dim);
+  }
+  .ep.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .ep.bad { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 45%, transparent); }
+  .meter { margin: 9px 0; }
+  .meter .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 3px; }
+  .meter .label { color: var(--dim); }
+  .meter .val { font-family: var(--mono); }
+  .bar { height: 8px; border-radius: 4px; background: #14120c; overflow: hidden; }
+  .bar > div { height: 100%; border-radius: 4px; background: var(--ok); transition: width .6s; }
+  .bar > div.warm { background: var(--warm); }
+  .bar > div.hot { background: var(--hot); }
+  .bar.avg { height: 4px; margin-top: 3px; }
+  .bar.avg > div { opacity: .55; }
+  .avgtext { font: 10.5px var(--mono); color: var(--dim); }
+  .counts { display: flex; gap: 18px; margin: 12px 0 4px; }
+  .count { text-align: center; }
+  .count b { display: block; font: 600 20px var(--mono); color: var(--accent); }
+  .count b.zero { color: var(--dim); }
+  .count span { font-size: 11.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .07em; }
+  .sessions { margin-top: 8px; border-top: 1px solid var(--edge); padding-top: 8px; }
+  .sess { font: 12px var(--mono); color: var(--text); padding: 2px 0; display: flex; gap: 8px; align-items: center; white-space: nowrap; overflow: hidden; }
+  .sess .agent { color: var(--accent); min-width: 52px; }
+  .sess .agent:not(.claude) { color: var(--warm); }
+  .sess .cwd { overflow: hidden; text-overflow: ellipsis; }
+  .sess .etime { color: var(--dim); margin-left: auto; }
+  /* Working sessions carry a lit dot and no close button; idle ones are dimmed. */
+  .sess .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--edge); flex: none; }
+  .sess .dot.on { background: var(--ok); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .sess.idle .cwd, .sess.idle .agent { color: var(--dim); }
+  .sess .gone { font-size: 10px; color: var(--warm); border: 1px solid color-mix(in srgb, var(--warm) 45%, transparent); border-radius: 8px; padding: 0 5px; flex: none; }
+  .sess .quiet { color: var(--dim); flex: none; }
+  .sess .close {
+    font: 11px var(--mono); color: var(--dim); background: none; flex: none;
+    border: 1px solid var(--edge); border-radius: 5px; padding: 0 6px; cursor: pointer; line-height: 17px;
+  }
+  .sess .close:hover { color: var(--hot); border-color: var(--hot); }
+  .sess .close.armed { color: var(--hot); border-color: var(--hot); }
+  .sess .spacer { width: 25px; flex: none; }
+  .err { font: 12px var(--mono); color: var(--hot); margin-top: 8px; word-break: break-all; }
+  .asleepnote { font: 12px var(--mono); color: var(--dim); margin-top: 8px; }
+  .card.asleep .meter, .card.asleep .counts, .card.asleep .sessions { opacity: .45; }
+  .actions { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+  .actions button {
+    font: 12px var(--mono); color: var(--dim); background: none;
+    border: 1px solid var(--edge); border-radius: 6px; padding: 3px 10px; cursor: pointer;
+  }
+  .actions button:hover { color: var(--warm); border-color: var(--warm); }
+  .actions button.cancel { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 50%, transparent); }
+  .countdown { font: 12px var(--mono); color: var(--warm); }
+  .gpuname { font-size: 11.5px; color: var(--dim); margin-top: -6px; margin-bottom: 6px; }
+  footer { margin-top: 20px; color: var(--dim); font-size: 12px; }
+  footer code { font-family: var(--mono); color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <h1>FLOTILLA</h1>
+  <div id="meta">loading…</div>
+</header>
+<div id="grid"></div>
+<footer>agents: <code>curl $FLOTILLA_URL/api/fleet</code></footer>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const shortCwd = (p) => {
+  if (!p) return "";
+  const parts = p.split("/").filter(Boolean);
+  return parts.length > 3 ? "…/" + parts.slice(-3).join("/") : p;
+};
+const barClass = (pct) => (pct >= 85 ? "hot" : pct >= 55 ? "warm" : "");
+
+function meter(label, pct, extra, avg) {
+  if (pct == null) return `<div class="meter"><div class="row"><span class="label">${label}</span><span class="val">–</span></div><div class="bar"><div style="width:0"></div></div></div>`;
+  const shown = Math.max(0, Math.min(100, pct));
+  let avgHtml = "";
+  if (avg && avg.m5 != null) {
+    const a5 = Math.max(0, Math.min(100, avg.m5));
+    const a15 = avg.m15 != null ? ` · 15m ${avg.m15.toFixed(0)}%` : "";
+    avgHtml = `<div class="bar avg" title="5-minute moving average"><div class="${barClass(a5)}" style="width:${a5}%"></div></div>
+      <div class="avgtext">5m ${avg.m5.toFixed(0)}%${a15}</div>`;
+  }
+  return `<div class="meter">
+    <div class="row"><span class="label">${label}</span><span class="val">${pct.toFixed(0)}%${extra ? " · " + esc(extra) : ""}</span></div>
+    <div class="bar"><div class="${barClass(shown)}" style="width:${shown}%"></div></div>${avgHtml}
+  </div>`;
+}
+const avgFor = (ep, field) => ep?.avg ? { m5: ep.avg.m5?.[field], m15: ep.avg.m15?.[field] } : null;
+
+let sleepPending = {};
+let idleThreshold = 3600;
+let watch = { counts: [], sessions: [] };
+const wakingUntil = {};
+async function postSleep(action, machine) {
+  await fetch(action === "sleep" ? "/api/sleep" : "/api/sleep-cancel", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ machine }),
+  });
+  refresh();
+}
+async function postWake(machine) {
+  wakingUntil[machine] = Date.now() + 90000;
+  await fetch("/api/wake", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ machine }),
+  });
+  refresh();
+}
+const unreachable = (err) =>
+  /Operation timed out|Connection timed out|No route to host|Connection refused|Network is unreachable/i.test(err ?? "");
+function tickCountdowns() {
+  for (const el of document.querySelectorAll(".countdown[data-at]")) {
+    const left = Math.ceil((Date.parse(el.dataset.at) - Date.now()) / 1000);
+    el.textContent = left > 0 ? `sleeping in ${left}s` : "going to sleep…";
+  }
+}
+setInterval(tickCountdowns, 1000);
+
+const dur = (s) =>
+  s == null ? "" : s >= 86400 ? `${Math.floor(s / 86400)}d` : s >= 3600 ? `${Math.floor(s / 3600)}h` : s >= 60 ? `${Math.floor(s / 60)}m` : `${s}s`;
+// A session the desktop cannot vouch for reads as active — unknown is never
+// grounds for offering to kill something.
+const isActive = (s) => s.quiet_s == null || s.quiet_s < idleThreshold;
+
+// Closing is two-tap rather than instant — a stray click on a row should not
+// end a session. The armed state lives outside the DOM so a refresh keeps it.
+const closeArmed = {};
+function armClose(key) {
+  closeArmed[key] = Date.now() + 5000;
+  refresh();
+  setTimeout(refresh, 5200);
+}
+async function doClose(machine, endpoint, pid, key) {
+  delete closeArmed[key];
+  try {
+    const r = await fetch("/api/session/close", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ machine, endpoint, pid }),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      flash(`close failed: ${e.error ?? r.status}`);
+    }
+  } catch (e) {
+    flash("close failed: " + e);
+  }
+  refresh();
+}
+let flashUntil = 0;
+function flash(msg) {
+  flashUntil = Date.now() + 6000;
+  document.getElementById("meta").textContent = msg;
+}
+
+function sessionRow(machine, s) {
+  const active = isActive(s);
+  const key = `${machine}/${s.id}/${s.pid}`;
+  const armed = (closeArmed[key] ?? 0) > Date.now();
+  const label = s.title || shortCwd(s.cwd) || s.cmd;
+  const tip = [s.title, s.branch && `branch: ${s.branch}`, s.cwd, s.cmd].filter(Boolean).join("\n");
+  const gone = s.cwd_deleted ? `<span class="gone" title="the working directory no longer exists">no worktree</span>` : "";
+  const quiet = active ? "" : `<span class="quiet" title="no activity recorded by Claude Desktop for ${dur(s.quiet_s)}">idle ${dur(s.quiet_s)}</span>`;
+  let tail = `<span class="spacer"></span>`;
+  if (s.closable)
+    tail = armed
+      ? `<button class="close armed" onclick="doClose('${esc(machine)}','${esc(s.id)}',${s.pid},'${esc(key)}')" title="terminate this session">kill?</button>`
+      : `<button class="close" onclick="armClose('${esc(key)}')" title="close this idle session">&times;</button>`;
+  return `<div class="sess ${active ? "" : "idle"}">
+    <span class="dot ${active ? "on" : ""}" title="${active ? "active" : "idle for " + dur(s.quiet_s)}"></span>
+    <span class="agent ${s.agent}">${s.agent}</span>
+    <span class="cwd" title="${esc(tip)}">${esc(label)}</span>${gone}
+    <span class="etime">${esc(s.etime)}</span>${quiet}${tail}
+  </div>`;
+}
+
+function renderMachine(m) {
+  const eps = Object.entries(m.endpoints);
+  const epOf = (id) => m.endpoints[id]?.ok ? m.endpoints[id] : null;
+  const winEp = epOf("win"), wslEp = epOf("wsl"), localEp = epOf("local");
+  const win = winEp?.data, wsl = wslEp?.data, local = localEp?.data;
+  const primaryEp = localEp || winEp || wslEp;   // win is host-wide truth on dual-boot boxes
+  const primary = primaryEp?.data;
+
+  // GPU: nvidia-smi / ioreg beat Windows perf counters when both exist.
+  let gpu = null, gpuEp = null;
+  for (const [, ep] of eps) {
+    const g = ep.ok && ep.data?.gpu;
+    if (g && (!gpu || g.kind !== "windows")) { gpu = g; gpuEp = ep; }
+  }
+
+  const epTags = eps.map(([id, ep]) => {
+    const age = ep.fetched_at ? Math.round((Date.now() - Date.parse(ep.fetched_at)) / 1000) : null;
+    const stale = age == null || age > 120;
+    return `<span class="ep ${ep.ok && !stale ? "ok" : "bad"}" title="${esc(ep.host)} ${esc(ep.error ?? "")}">${id}${age != null ? " " + age + "s" : ""}</span>`;
+  }).join("");
+
+  const cpuExtra = primary?.load1 != null ? `load ${primary.load1}` : (primary ? `${primary.ncpu} cores` : null);
+  let html = `<div class="card"><h2>${esc(m.name)}<span class="eps">${epTags}</span></h2>`;
+  html += meter("CPU" + (win && wsl ? " (host)" : ""), primary?.cpu_pct ?? null, cpuExtra, avgFor(primaryEp, "cpu_pct"));
+  if (win && wsl) html += meter("CPU (wsl)", wsl.cpu_pct ?? null, wsl.load1 != null ? `load ${wsl.load1}` : null, avgFor(wslEp, "cpu_pct"));
+  const gpuMem = gpu?.mem_used_mb != null
+    ? `${(gpu.mem_used_mb / 1024).toFixed(1)}${gpu.mem_total_mb ? "/" + (gpu.mem_total_mb / 1024).toFixed(0) : ""} GB`
+    : null;
+  html += meter("GPU", gpu?.util_pct ?? null, gpuMem, avgFor(gpuEp, "gpu_util_pct"));
+  if (gpu?.name) html += `<div class="gpuname">${esc(gpu.name)}</div>`;
+
+  // Both rows are driven by the server's watch lists, not by a fixed set of names.
+  const sum = (f) => eps.reduce((n, [, ep]) => n + (ep.ok ? f(ep.data) : 0), 0);
+  const count = (n, label) => `<div class="count"><b class="${n ? "" : "zero"}">${n}</b><span>${esc(label)}</span></div>`;
+  const tallies = watch.counts.map((name) => count(sum((d) => d.counts?.[name] ?? 0), name));
+  const agentTallies = watch.sessions.map((name) => count(sum((d) => (d.sessions?.[name] ?? []).length), name));
+  html += `<div class="counts">${tallies.join("")}${agentTallies.join("")}</div>`;
+
+  const sessions = [];
+  for (const [id, ep] of eps) {
+    if (!ep.ok) continue;
+    for (const [agent, list] of Object.entries(ep.data.sessions ?? {}))
+      for (const s of list) sessions.push({ agent, id, ...s });
+  }
+  // Working sessions first; among the rest the stalest float up, since those
+  // are the ones there is anything to do about.
+  sessions.sort((a, b) => (isActive(a) === isActive(b) ? (b.quiet_s ?? 0) - (a.quiet_s ?? 0) : isActive(a) ? -1 : 1));
+  if (sessions.length)
+    html += `<div class="sessions">` + sessions.map((s) => sessionRow(m.name, s)).join("") + `</div>`;
+  // Endpoints that time out read as "asleep", not as errors; real failures stay loud.
+  const down = eps.filter(([, ep]) => !ep.ok);
+  const asleep = down.length === eps.length && down.every(([, ep]) => unreachable(ep.error));
+  if (asleep) {
+    html += `<div class="asleepnote">unreachable — asleep?</div>`;
+  } else {
+    const napping = down.filter(([, ep]) => unreachable(ep.error)).map(([id]) => `${id}: unreachable`);
+    if (napping.length) html += `<div class="asleepnote">${esc(napping.join(" · "))}</div>`;
+    const errs = down.filter(([, ep]) => ep.error && !unreachable(ep.error)).map(([id, ep]) => `${id}: ${ep.error}`);
+    if (errs.length) html += `<div class="err">${esc(errs.join(" · "))}</div>`;
+  }
+
+  const pendingAt = sleepPending[m.name];
+  if (asleep) {
+    const waking = (wakingUntil[m.name] ?? 0) > Date.now();
+    if (m.wol) html += `<div class="actions">${waking
+      ? `<span class="countdown">waking… (can take a minute)</span>`
+      : `<button onclick="postWake('${esc(m.name)}')" title="send Wake-on-LAN magic packets">wake</button>`}</div>`;
+  } else if (pendingAt) {
+    html += `<div class="actions"><span class="countdown" data-at="${esc(pendingAt)}">sleeping soon</span>
+       <button class="cancel" onclick="postSleep('cancel','${esc(m.name)}')">cancel</button></div>`;
+  } else {
+    html += `<div class="actions"><button onclick="postSleep('sleep','${esc(m.name)}')" title="suspends after a delay — time to power off input devices">sleep</button></div>`;
+  }
+  if (asleep) html = html.replace('class="card"', 'class="card asleep"');
+  return html + "</div>";
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/fleet");
+    const fleet = await r.json();
+    sleepPending = fleet.sleep_pending ?? {};
+    idleThreshold = fleet.session_idle_s ?? 3600;
+    watch = fleet.watch ?? { counts: [], sessions: [] };
+    document.getElementById("grid").innerHTML = fleet.machines.map(renderMachine).join("");
+    if (Date.now() > flashUntil)
+      document.getElementById("meta").textContent =
+        `updated ${new Date(fleet.updated_at).toLocaleTimeString()} · polling every ${fleet.poll_interval_s}s`;
+    tickCountdowns();
+  } catch (e) {
+    document.getElementById("meta").textContent = "fetch failed: " + e;
+  }
+}
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

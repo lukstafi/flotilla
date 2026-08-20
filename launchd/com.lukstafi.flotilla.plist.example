@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Autostart on the hub (macOS). Replace the paths, then:
+       cp launchd/com.lukstafi.flotilla.plist.example ~/Library/LaunchAgents/com.lukstafi.flotilla.plist
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lukstafi.flotilla.plist
+     After editing server.ts, restart with:
+       launchctl kickstart -k gui/$(id -u)/com.lukstafi.flotilla -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lukstafi.flotilla</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/.bun/bin/bun</string>
+    <string>/path/to/flotilla/server.ts</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/path/to/Library/Logs/flotilla.log</string>
+  <key>StandardErrorPath</key>
+  <string>/path/to/Library/Logs/flotilla.log</string>
+</dict>
+</plist>
