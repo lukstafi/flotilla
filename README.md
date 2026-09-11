@@ -99,6 +99,13 @@ lives at `~/.claude/remote/ccd-cli/<version>`, so its executable is named after
 the version and a name match alone misses every remote session. The collector
 carries that knowledge for the agents it knows, so the config does not have to.
 
+On macOS, Codex backends bundled in `ChatGPT.app` or `Codex.app` are discovered
+by executable path and shown as **Codex App (shared server)**. Each row counts
+one resident backend process, which can host multiple app threads; its uptime
+and working directory belong to that server, not an individual thread. App
+helpers and VS Code extension servers remain excluded. Codex activity is unknown
+and these rows have no close button.
+
 ## Closing idle sessions
 
 Idle sessions carry a close button: `×`, then `kill?` to confirm. Two taps,
@@ -175,7 +182,8 @@ Payload shape: `machines[].endpoints.<id>` each carry `ok`/`error`/`fetched_at`
 plus `data` with `cpu_pct`, `load1`, `ncpu`, `gpu`
 (`kind`/`name`/`util_pct`/`mem_used_mb`/`mem_total_mb`), `counts` (a map of
 name → count) and `sessions` (a map of name → array of
-`pid`/`etime`/`cwd`/`cwd_deleted`/`cmd`, plus `title`/`branch`/`archived`/
+`pid`/`etime`/`cwd`/`cwd_deleted`/`cmd` (Unix also supplies `kind`: `process` or
+`app-server`), plus `title`/`branch`/`archived`/
 `quiet_s`/`closable` where Claude Desktop knows the session). Each endpoint also
 carries `avg.{m1,m5,m15}` moving averages of `cpu_pct` and `gpu_util_pct`, with
 the contributing sample count. History is in memory and resets on restart.

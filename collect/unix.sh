@@ -94,8 +94,18 @@ counts_json() {
 agent_exe_fragment() {
   case "$1" in
     claude) printf '%s' ".claude/remote/ccd-cli/" ;;
+    codex) printf '%s' '.app/Contents/Resources/codex' ;;
     *) printf '' ;;
   esac
+}
+
+session_exe() {
+  if [ "$OS" = Darwin ]; then
+    ps -ww -o comm= -p "$1" 2>/dev/null
+  else
+    # Linux ps comm is only a short name, not the executable path.
+    readlink "/proc/$1/exe" 2>/dev/null
+  fi
 }
 
 session_pids() {
@@ -103,23 +113,35 @@ session_pids() {
   local name="$1" extra="${2:-}" pid a
   pgrep -x "$name" 2>/dev/null
   [ -z "$extra" ] && return
+  if [ "$name" = codex ]; then
+    # macOS pgrep can miss the app backend with its very long argument list.
+    # Scan executable paths, preserving spaces in an app's installation path.
+    ps -ww -axo pid=,comm= 2>/dev/null | awk '
+      /\/(ChatGPT|Codex)\.app\/Contents\/Resources\/codex$/ {print $1}'
+    return
+  fi
   for pid in $(pgrep -f "$extra" 2>/dev/null); do
-    a=$(ps -o args= -p "$pid" 2>/dev/null)
+    a=$(session_exe "$pid")
     # Only the executable counts, so shells that merely mention the path in their
     # own command line (this collector's pipeline included) are not counted.
-    case "${a%% *}" in *"$extra"*) echo "$pid" ;; esac
+    case "$a" in *"$extra"*) echo "$pid" ;; esac
   done
 }
 
 sessions_of() {
-  local name="$1" extra out="" pid etime args cwd gone
+  local name="$1" extra out="" pid etime args cwd gone exe kind
   extra=$(agent_exe_fragment "$name")
   for pid in $(session_pids "$name" "$extra" | sort -un); do
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
+    args=$(ps -ww -o args= -p "$pid" 2>/dev/null)
     [ -z "$args" ] && continue
-    case "$args" in
+    exe=$(session_exe "$pid")
+    kind=process
+    case "$exe" in
+      */ChatGPT.app/Contents/Resources/codex|*/Codex.app/Contents/Resources/codex)
+        [ "$name" = codex ] || continue
+        kind=app-server ;;
       # Electron/app-bundle helpers and IDE extension servers, not real sessions.
-      */Applications/ChatGPT.app/*|*/.vscode/extensions/*) continue ;;
+      */ChatGPT.app/*|*/Codex.app/*|*/.vscode/extensions/*) continue ;;
     esac
     etime=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
     cwd=""
@@ -134,7 +156,7 @@ sessions_of() {
     case "$cwd" in *" (deleted)") cwd=${cwd% (deleted)}; gone=true ;; esac
     args=$(printf '%s' "$args" | cut -c1-160)
     [ -n "$out" ] && out="$out,"
-    out="$out{\"pid\":$pid,\"etime\":\"$(json_escape "$etime")\",\"cwd\":\"$(json_escape "$cwd")\",\"cwd_deleted\":$gone,\"cmd\":\"$(json_escape "$args")\"}"
+    out="$out{\"pid\":$pid,\"etime\":\"$(json_escape "$etime")\",\"cwd\":\"$(json_escape "$cwd")\",\"cwd_deleted\":$gone,\"cmd\":\"$(json_escape "$args")\",\"kind\":\"$kind\"}"
   done
   printf '[%s]' "$out"
 }
