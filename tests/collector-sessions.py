@@ -45,6 +45,12 @@ ps() {
   esac
 }
 lsof() { printf 'p123\nn/work/repo\n'; }
+readlink() {
+  case "$1" in
+    */exe) local pid=${1#/proc/}; exe "${pid%/exe}" ;;
+    */cwd) echo /work/repo ;;
+  esac
+}
 '''
 for agent, expected in [('codex', [10, 20, 21]), ('claude', [60, 61]), ('aider', [])]:
     result = subprocess.check_output(['bash'], input=escape + functions + fixture + f'\nsessions_of {agent}\n', text=True)
@@ -54,3 +60,7 @@ for agent, expected in [('codex', [10, 20, 21]), ('claude', [60, 61]), ('aider',
         assert [r['kind'] for r in rows] == ['process', 'app-server', 'app-server']
         assert all(r['cwd'] == '/work/repo' for r in rows)
 print('PASS: CLI, both app bundles, spaces, pgrep omission, deduplication, helpers, IDE, remote Claude, empty list')
+
+result = subprocess.check_output(['bash'], input=escape + functions + fixture + '\nOS=Linux\nsessions_of claude\n', text=True)
+assert [r['pid'] for r in json.loads(result)] == [60, 61], result
+print('PASS: Linux remote Claude executable paths')

@@ -99,6 +99,15 @@ agent_exe_fragment() {
   esac
 }
 
+session_exe() {
+  if [ "$OS" = Darwin ]; then
+    ps -ww -o comm= -p "$1" 2>/dev/null
+  else
+    # Linux ps comm is only a short name, not the executable path.
+    readlink "/proc/$1/exe" 2>/dev/null
+  fi
+}
+
 session_pids() {
   # $1: exact process name (pgrep -x). $2: optional executable-path fragment.
   local name="$1" extra="${2:-}" pid a
@@ -112,7 +121,7 @@ session_pids() {
     return
   fi
   for pid in $(pgrep -f "$extra" 2>/dev/null); do
-    a=$(ps -ww -o comm= -p "$pid" 2>/dev/null)
+    a=$(session_exe "$pid")
     # Only the executable counts, so shells that merely mention the path in their
     # own command line (this collector's pipeline included) are not counted.
     case "$a" in *"$extra"*) echo "$pid" ;; esac
@@ -125,7 +134,7 @@ sessions_of() {
   for pid in $(session_pids "$name" "$extra" | sort -un); do
     args=$(ps -ww -o args= -p "$pid" 2>/dev/null)
     [ -z "$args" ] && continue
-    exe=$(ps -ww -o comm= -p "$pid" 2>/dev/null)
+    exe=$(session_exe "$pid")
     kind=process
     case "$exe" in
       */ChatGPT.app/Contents/Resources/codex|*/Codex.app/Contents/Resources/codex)
