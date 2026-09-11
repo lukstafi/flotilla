@@ -179,14 +179,15 @@ function decorateSessions(data: any) {
   if (!data?.sessions) return data;
   const now = Date.now();
   const withState = (arr: any[], agent: string) => (arr ?? []).map((s: any) => {
-    const desk = s.cwd ? desktopByCwd.get(s.cwd) : undefined;
+    const desk = agent === "claude" && s.cwd ? desktopByCwd.get(s.cwd) : undefined;
     const quiet_s = desk ? Math.round((now - desk.last_activity) / 1000) : null;
     return {
       ...s,
       quiet_s,
       // Only Claude sessions, only ones the desktop can vouch for as quiet.
       closable: agent === "claude" && quiet_s != null && quiet_s >= SESSION_IDLE_S,
-      title: desk?.title ?? null, branch: desk?.branch ?? null, archived: desk?.archived ?? null,
+      title: s.kind === "app-server" ? "Codex App (shared server)" : desk?.title ?? null,
+      branch: desk?.branch ?? null, archived: desk?.archived ?? null,
     };
   });
   return {
