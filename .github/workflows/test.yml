@@ -1,0 +1,14 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun test
+      - run: python3 tests/collector-sessions.py
+      - run: bash -n collect/unix.sh scripts/setup-linux-power.sh
+      - run: bun build server.ts --target=bun --outfile=/tmp/flotilla.js

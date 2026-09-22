@@ -124,24 +124,31 @@ function meter(label, pct, extra, avg) {
 const avgFor = (ep, field) => ep?.avg ? { m5: ep.avg.m5?.[field], m15: ep.avg.m15?.[field] } : null;
 
 let sleepPending = {};
+let sleepStatus = {};
 let idleThreshold = 3600;
 let watch = { counts: [], sessions: [] };
 const wakingUntil = {};
-async function postSleep(action, machine) {
-  await fetch(action === "sleep" ? "/api/sleep" : "/api/sleep-cancel", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ machine }),
+async function powerAction(path, machine) {
+  const response = await fetch(path, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ machine }),
   });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error ?? `HTTP ${response.status}`);
+  return result;
+}
+async function postSleep(action, machine) {
+  try { await powerAction(action === "sleep" ? "/api/sleep" : "/api/sleep-cancel", machine); }
+  catch (error) { flash("sleep request failed: " + error.message); }
   refresh();
 }
 async function postWake(machine) {
-  wakingUntil[machine] = Date.now() + 90000;
-  await fetch("/api/wake", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ machine }),
-  });
+  try {
+    await powerAction("/api/wake", machine);
+    wakingUntil[machine] = Date.now() + 90000;
+  } catch (error) {
+    delete wakingUntil[machine];
+    flash("wake request failed: " + error.message);
+  }
   refresh();
 }
 const unreachable = (err) =>
@@ -217,7 +224,7 @@ function renderMachine(m) {
   const epOf = (id) => m.endpoints[id]?.ok ? m.endpoints[id] : null;
   const winEp = epOf("win"), wslEp = epOf("wsl"), localEp = epOf("local");
   const win = winEp?.data, wsl = wslEp?.data, local = localEp?.data;
-  const primaryEp = localEp || winEp || wslEp;   // win is host-wide truth on dual-boot boxes
+  const primaryEp = localEp || epOf("linux") || winEp || wslEp || eps.find(([, ep]) => ep.ok)?.[1];   // win is host-wide truth on dual-boot boxes
   const primary = primaryEp?.data;
 
   // GPU: nvidia-smi / ioreg beat Windows perf counters when both exist.
@@ -274,11 +281,18 @@ function renderMachine(m) {
   }
 
   const pendingAt = sleepPending[m.name];
+  const power = sleepStatus[m.name];
+  if (power?.state === "failed" || power?.state === "unconfirmed")
+    html += `<div class="err">${power.state === "failed" ? "Sleep failed" : "Sleep unconfirmed"}: ${esc(power.error)} (${esc(new Date(power.at).toLocaleTimeString())})</div>`;
+
   if (asleep) {
     const waking = (wakingUntil[m.name] ?? 0) > Date.now();
     if (m.wol) html += `<div class="actions">${waking
       ? `<span class="countdown">waking… (can take a minute)</span>`
       : `<button onclick="postWake('${esc(m.name)}')" title="send Wake-on-LAN magic packets">wake</button>`}</div>`;
+    else html += `<div class="actions">Wake manually (no Wake-on-LAN configured)</div>`;
+  } else if (power?.state === "executing") {
+    html += `<div class="actions"><span class="countdown">requesting sleep…</span></div>`;
   } else if (pendingAt) {
     html += `<div class="actions"><span class="countdown" data-at="${esc(pendingAt)}">sleeping soon</span>
        <button class="cancel" onclick="postSleep('cancel','${esc(m.name)}')">cancel</button></div>`;
@@ -294,6 +308,7 @@ async function refresh() {
     const r = await fetch("/api/fleet");
     const fleet = await r.json();
     sleepPending = fleet.sleep_pending ?? {};
+    sleepStatus = fleet.sleep_status ?? {};
     idleThreshold = fleet.session_idle_s ?? 3600;
     watch = fleet.watch ?? { counts: [], sessions: [] };
     document.getElementById("grid").innerHTML = fleet.machines.map(renderMachine).join("");

@@ -11,6 +11,7 @@
 // Run: bun server.ts   (config: ./flotilla.config.json, or $FLOTILLA_CONFIG)
 
 import { join } from "path";
+import { selectSleepRoute, sleepCommand, runCommand, SleepController } from "./power";
 import { homedir } from "os";
 import { readFileSync, readdirSync, statSync } from "fs";
 
@@ -278,36 +279,13 @@ let lastPollAt = 0;
 // Delayed machine sleep: the delay runs here (cancellable) so the user can
 // power off input devices that would otherwise interrupt going to sleep.
 const SLEEP_DELAY_S = config.sleep_delay_s ?? 15;
-const WIN_SUSPEND_SCRIPT = `Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Application]::SetSuspendState([System.Windows.Forms.PowerState]::Suspend, $false, $false)`;
-const pendingSleeps = new Map<string, { sleep_at: string; timer: ReturnType<typeof setTimeout> }>();
+const sleepController = new SleepController(
+  (m) => selectSleepRoute(m, ep => state.get(epKey(m.name, ep.id)) as any,
+    Date.now(), Math.max(60_000, config.poll_interval_s * 3000)),
+  route => runCommand(sleepCommand(route)), SLEEP_DELAY_S * 1000,
+);
 
-function executeSleep(m: MachineConfig): void {
-  pendingSleeps.delete(m.name);
-  if (m.endpoints.some((e) => e.local)) {
-    Bun.spawn(["pmset", "sleepnow"]);
-    return;
-  }
-  // Suspending the Windows host suspends the whole box, WSL included.
-  const win = m.endpoints.find((e) => e.kind === "windows");
-  if (!win) return console.error(`flotilla: no sleep route for ${m.name}`);
-  Bun.spawn(
-    ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", win.host!, "powershell -NoProfile -Command -"],
-    { stdin: Buffer.from(WIN_SUSPEND_SCRIPT), stdout: "ignore", stderr: "ignore" },
-  );
-}
-
-function scheduleSleep(m: MachineConfig): { sleep_at: string } {
-  const existing = pendingSleeps.get(m.name);
-  if (existing) return { sleep_at: existing.sleep_at };
-  const sleep_at = new Date(Date.now() + SLEEP_DELAY_S * 1000).toISOString();
-  const timer = setTimeout(() => executeSleep(m), SLEEP_DELAY_S * 1000);
-  pendingSleeps.set(m.name, { sleep_at, timer });
-  console.log(`flotilla: sleep scheduled for ${m.name} at ${sleep_at}`);
-  return { sleep_at };
-}
-
-function sendWake(m: MachineConfig): { sent: string[] } {
+async function sendWake(m: MachineConfig): Promise<{ sent: string[] }> {
   const wol = m.wol!;
   // Magic packet: 6x 0xFF + 16x MAC, UDP to the LAN broadcast (ports 7 and 9).
   const py = `
@@ -322,20 +300,11 @@ for mac in sys.argv[2:]:
         s.sendto(payload, ('255.255.255.255', port))
     s.close()
 `;
-  Bun.spawn(["python3", "-c", py, wol.broadcast, ...wol.macs], { stdout: "ignore", stderr: "ignore" });
+  const result = await runCommand({ argv: ["python3", "-c", py, wol.broadcast, ...wol.macs] });
+  if (result.code !== 0 || result.timedOut) throw new Error(result.stderr.trim() || "Wake packet send failed");
   console.log(`flotilla: wake packets sent for ${m.name} (${wol.macs.join(", ")})`);
   return { sent: wol.macs };
 }
-
-function cancelSleep(name: string): boolean {
-  const pending = pendingSleeps.get(name);
-  if (!pending) return false;
-  clearTimeout(pending.timer);
-  pendingSleeps.delete(name);
-  console.log(`flotilla: sleep cancelled for ${name}`);
-  return true;
-}
-
 
 // Terminate one agent session. Every gate is re-checked server-side: the UI's
 // button is a convenience, not the authority.
@@ -429,9 +398,8 @@ function fleetSnapshot() {
     updated_at: new Date().toISOString(),
     poll_interval_s: config.poll_interval_s,
     polling: Date.now() - lastClientRequest > IDLE_AFTER_MS ? "paused" : "active",
-    sleep_pending: Object.fromEntries(
-      [...pendingSleeps].map(([name, p]) => [name, p.sleep_at]),
-    ),
+    sleep_pending: sleepController.pendingSnapshot(),
+    sleep_status: Object.fromEntries(sleepController.status),
     sleep_delay_s: SLEEP_DELAY_S,
     session_idle_s: SESSION_IDLE_S,
     watch: { counts: WATCH_COUNTS, sessions: WATCH_SESSIONS },
@@ -456,11 +424,15 @@ const server = Bun.serve({
       const body = await req.json().catch(() => ({}));
       const m = config.machines.find((x) => x.name === body.machine);
       if (!m) return Response.json({ error: `unknown machine: ${body.machine}` }, { status: 404 });
-      return Response.json({ machine: m.name, ...scheduleSleep(m) });
+      try {
+        return Response.json({ machine: m.name, ...sleepController.schedule(m) });
+      } catch (error) {
+        return Response.json({ error: String(error instanceof Error ? error.message : error) }, { status: 409 });
+      }
     }
     if (path === "/api/sleep-cancel" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
-      return Response.json({ machine: body.machine, cancelled: cancelSleep(body.machine) });
+      return Response.json({ machine: body.machine, cancelled: sleepController.cancel(body.machine) });
     }
     if (path === "/api/wake" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
@@ -468,7 +440,11 @@ const server = Bun.serve({
       if (!m) return Response.json({ error: `unknown machine: ${body.machine}` }, { status: 404 });
       if (!m.wol) return Response.json({ error: `no wol config for ${m.name}` }, { status: 400 });
       lastClientRequest = Date.now(); // keep polling so the wake-up is noticed
-      return Response.json({ machine: m.name, ...sendWake(m) });
+      try {
+        return Response.json({ machine: m.name, ...await sendWake(m) });
+      } catch (error) {
+        return Response.json({ error: String(error instanceof Error ? error.message : error) }, { status: 502 });
+      }
     }
     if (path === "/api/session/close" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));

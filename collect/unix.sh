@@ -174,8 +174,10 @@ sessions_json() {
 COUNTS_JSON=$(counts_json)
 SESSIONS_JSON=$(sessions_json)
 
+IS_WSL=false
+if [ "$OS" = Linux ] && grep -qi microsoft /proc/sys/kernel/osrelease; then IS_WSL=true; fi
 OS_TAG=$([ "$OS" = "Darwin" ] && echo darwin || echo linux)
 
-printf '{"os":"%s","host":"%s","ncpu":%s,"cpu_pct":%s,"load1":%s,"gpu":%s,"counts":%s,"sessions":%s}\n' \
-  "$OS_TAG" "$(json_escape "$HOST")" "${NCPU:-null}" "${CPU_PCT:-null}" "${LOAD1:-null}" \
+printf '{"os":"%s","is_wsl":%s,"host":"%s","ncpu":%s,"cpu_pct":%s,"load1":%s,"gpu":%s,"counts":%s,"sessions":%s}\n' \
+  "$OS_TAG" "$IS_WSL" "$(json_escape "$HOST")" "${NCPU:-null}" "${CPU_PCT:-null}" "${LOAD1:-null}" \
   "$GPU_JSON" "$COUNTS_JSON" "$SESSIONS_JSON"
