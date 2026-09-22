@@ -13,6 +13,10 @@ describe("physical OS routing", () => {
     const records = { linux: observed("linux", false), win: observed("windows", undefined, 10_000), wsl: observed("linux", true) };
     expect(selectSleepRoute(machine, e => records[e.id], now).platform).toBe("linux");
   });
+  test("new Windows observation wins over the previous Linux boot", () => {
+    const records = { linux: observed("linux", false, 10_000), win: observed("windows") };
+    expect(selectSleepRoute(machine, e => records[e.id], now).platform).toBe("windows");
+  });
   test("WSL never becomes a Linux suspend route", () => {
     expect(() => selectSleepRoute({ name: "wsl", endpoints: [wsl] }, () => observed("linux", true), now)).toThrow();
     expect(() => selectSleepRoute({ name: "wsl", endpoints: [wsl] }, () => observed("linux"), now)).toThrow();
@@ -76,6 +80,13 @@ describe("delayed sleep lifecycle", () => {
     f.controller.schedule(machine); await f.controller.fire(machine);
     expect(f.controller.status.get(machine.name)?.state).toBe("failed");
     expect(f.controller.status.get(machine.name)?.error).toContain("authentication");
+  });
+  test("definite SSH setup errors are failures", async () => {
+    for (const stderr of ["Permission denied (publickey).", "Host key verification failed.", "ssh: connect to host box port 22: Connection refused"]) {
+      const f = fixture({ code: 255, stdout: "", stderr });
+      f.controller.schedule(machine); await f.controller.fire(machine);
+      expect(f.controller.status.get(machine.name)?.state).toBe("failed");
+    }
   });
   test("SSH loss is unconfirmed rather than a fabricated success/failure", async () => {
     const f = fixture({ code: 255, stdout: "", stderr: "Connection closed" });

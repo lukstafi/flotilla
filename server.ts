@@ -355,23 +355,19 @@ async function closeSession(
   return { status: 200, body: { closed: pid, machine: m.name, endpoint: epId, detail: out.trim() } };
 }
 
-let polling = false;
-async function pollAll(): Promise<void> {
-  if (polling) return; // a slow round must not stack onto the next tick
-  polling = true;
+let polling: Promise<void> | null = null;
+function pollAll(): Promise<void> {
+  if (polling) return polling; // Fresh callers join the same round.
   lastPollAt = Date.now();
   refreshDesktopSessions();
-  try {
-    await Promise.all(
-      config.machines.flatMap((m) => m.endpoints.map((e) => pollEndpoint(m.name, e))),
-    );
-  } finally {
-    polling = false;
-  }
+  polling = Promise.all(
+    config.machines.flatMap((m) => m.endpoints.map((e) => pollEndpoint(m.name, e))),
+  ).then(() => {}).finally(() => { polling = null; });
+  return polling;
 }
 
 function pollTick(): void {
-  if (Date.now() - lastClientRequest > IDLE_AFTER_MS) return; // nobody watching
+  if (Date.now() - lastClientRequest > IDLE_AFTER_MS && !Object.keys(sleepController.pendingSnapshot()).length) return; // nobody watching
   pollAll();
 }
 
@@ -428,6 +424,8 @@ const server = Bun.serve({
       const m = config.machines.find((x) => x.name === body.machine);
       if (!m) return Response.json({ error: `unknown machine: ${body.machine}` }, { status: 404 });
       try {
+        await (noteClientActivity() ?? polling);
+        lastClientRequest = Date.now();
         return Response.json({ machine: m.name, ...sleepController.schedule(m) });
       } catch (error) {
         return Response.json({ error: String(error instanceof Error ? error.message : error) }, { status: 409 });

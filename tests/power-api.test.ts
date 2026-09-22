@@ -8,7 +8,7 @@ test("HTTP sleep scheduling, cancellation, and delayed failure use the native ro
   const reserve = Bun.serve({ port: 0, fetch: () => new Response("reserved") });
   const port = reserve.port; reserve.stop(true);
   const config = join(dir, "config.json"), log = join(dir, "commands");
-  writeFileSync(config, JSON.stringify({ port, poll_interval_s: 1, sleep_delay_s: 0.2, ssh_timeout_ms: 1000,
+  writeFileSync(config, JSON.stringify({ port, poll_interval_s: 0.1, idle_after_s: 0.05, sleep_delay_s: 0.2, ssh_timeout_ms: 1000,
     machines: [{ name: "test", endpoints: [
       { id: "linux", kind: "unix", host: "native-test" },
       { id: "win", kind: "windows", host: "offline-test" },
@@ -19,7 +19,7 @@ case "$*" in *offline-test*) exit 255;; *timeout-test*) exec sleep 10;; esac
 body=$(cat)
 case "$body" in
   *'exec systemctl'*) echo native-suspend >> "$FLOTILLA_TEST_COMMANDS"; echo 'mock: authorization required' >&2; exit 1;;
-  *) printf '%s\\n' '{"os":"linux","is_wsl":false,"ncpu":1,"counts":{},"sessions":{}}';;
+  *) echo collect >> "$FLOTILLA_TEST_COMMANDS.polls"; printf '%s\\n' '{"os":"linux","is_wsl":false,"ncpu":1,"counts":{},"sessions":{}}';;
 esac
 `);
   chmodSync(join(dir, "ssh"), 0o755);
@@ -56,8 +56,13 @@ esac
     expect(readFileSync(log, "utf8")).toBe("native-suspend\n");
     await until(async () => (await snapshot()).machines[0].endpoints.timeout.error?.includes("timed out"));
     expect((await post("/api/wake")).status).toBe(400); // no fabricated WoL capability
+    await Bun.sleep(1300); // Let the current round finish and client activity expire.
+    const before = readFileSync(log + ".polls", "utf8");
+    expect((await post("/api/sleep")).status).toBe(200); // No GET to wake polling first.
+    expect(readFileSync(log + ".polls", "utf8").length).toBeGreaterThan(before.length);
+    expect((await (await post("/api/sleep-cancel")).json()).cancelled).toBe(true);
   } finally {
     proc.kill(); await proc.exited; await stderr;
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 10_000);

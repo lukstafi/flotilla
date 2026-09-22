@@ -25,19 +25,20 @@ export function selectSleepRoute(
   machine: Machine, observation: (ep: Endpoint) => Observation | undefined,
   now = Date.now(), maxAgeMs = 60_000,
 ): SleepRoute {
-  const routes: SleepRoute[] = [];
+  const routes: (SleepRoute & { stamp: number })[] = [];
   for (const ep of machine.endpoints) {
     const st = observation(ep);
     const stamp = Date.parse(st?.fetched_at ?? "");
     if (!st?.ok || !Number.isFinite(stamp) || now - stamp > maxAgeMs || !st.data) continue;
-    if (ep.kind === "windows" && st.data.os === "windows") routes.push({ endpoint: ep, platform: "windows" });
-    if (ep.kind === "unix" && st.data.os === "darwin") routes.push({ endpoint: ep, platform: "darwin" });
+    if (ep.kind === "windows" && st.data.os === "windows") routes.push({ endpoint: ep, platform: "windows", stamp });
+    if (ep.kind === "unix" && st.data.os === "darwin") routes.push({ endpoint: ep, platform: "darwin", stamp });
     if (ep.kind === "unix" && st.data.os === "linux" && st.data.is_wsl === false)
-      routes.push({ endpoint: ep, platform: "linux" });
+      routes.push({ endpoint: ep, platform: "linux", stamp });
   }
-  // A WSL observation alone is never authority to suspend its host. Native data
-  // wins over a recently stale Windows success during a dual-boot transition.
-  const route = routes.find(r => r.endpoint.local) ?? routes.find(r => r.platform !== "windows") ?? routes[0];
+  // A WSL observation alone is never authority to suspend its host. Prefer
+  // the freshest native observation across either direction of a dual boot.
+  routes.sort((a, b) => b.stamp - a.stamp);
+  const route = routes.find(r => r.endpoint.local) ?? routes[0];
   if (!route) throw new Error("No recently reachable native OS sleep route; refresh the fleet and check SSH access.");
   return route;
 }
@@ -118,7 +119,8 @@ export class SleepController {
       const route = this.choose(machine); // State can change during the cancellation window.
       this.status.set(machine.name, { state: "executing", at, endpoint: route.endpoint.id });
       const result = await this.execute(route);
-      const uncertain = result.timedOut || (result.code === 255 && !route.endpoint.local);
+      const setupFailed = /Permission denied|Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|Could not resolve hostname|Connection refused|No route to host|Network is unreachable|connect to host .* timed out/i.test(result.stderr);
+      const uncertain = !setupFailed && (result.timedOut || (result.code === 255 && !route.endpoint.local));
       this.status.set(machine.name, { state: uncertain ? "unconfirmed" : result.code === 0 ? "requested" : "failed",
         at, endpoint: route.endpoint.id,
         ...(uncertain || result.code !== 0 ? { error: (result.stderr.trim() ||
