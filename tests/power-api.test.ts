@@ -12,9 +12,10 @@ test("HTTP sleep scheduling, cancellation, and delayed failure use the native ro
     machines: [{ name: "test", endpoints: [
       { id: "linux", kind: "unix", host: "native-test" },
       { id: "win", kind: "windows", host: "offline-test" },
+      { id: "timeout", kind: "unix", host: "timeout-test" },
     ] }], watch: { counts: [], sessions: [] } }));
   writeFileSync(join(dir, "ssh"), `#!/bin/sh
-case "$*" in *offline-test*) exit 255;; esac
+case "$*" in *offline-test*) exit 255;; *timeout-test*) exec sleep 10;; esac
 body=$(cat)
 case "$body" in
   *'exec systemctl'*) echo native-suspend >> "$FLOTILLA_TEST_COMMANDS"; echo 'mock: authorization required' >&2; exit 1;;
@@ -53,6 +54,7 @@ esac
     const machine = await (await fetch(base + "/api/fleet/test")).json();
     expect(machine.sleep_status).toEqual(state.sleep_status.test);
     expect(readFileSync(log, "utf8")).toBe("native-suspend\n");
+    await until(async () => (await snapshot()).machines[0].endpoints.timeout.error?.includes("timed out"));
     expect((await post("/api/wake")).status).toBe(400); // no fabricated WoL capability
   } finally {
     proc.kill(); await proc.exited; await stderr;

@@ -152,7 +152,7 @@ async function postWake(machine) {
   refresh();
 }
 const unreachable = (err) =>
-  /Operation timed out|Connection timed out|No route to host|Connection refused|Network is unreachable/i.test(err ?? "");
+  /Operation timed out|Connection timed out|Collector connection or command timed out|No route to host|Connection refused|Network is unreachable/i.test(err ?? "");
 function tickCountdowns() {
   for (const el of document.querySelectorAll(".countdown[data-at]")) {
     const left = Math.ceil((Date.parse(el.dataset.at) - Date.now()) / 1000);
@@ -270,7 +270,8 @@ function renderMachine(m) {
     html += `<div class="sessions">` + sessions.map((s) => sessionRow(m.name, s)).join("") + `</div>`;
   // Endpoints that time out read as "asleep", not as errors; real failures stay loud.
   const down = eps.filter(([, ep]) => !ep.ok);
-  const asleep = down.length === eps.length && down.every(([, ep]) => unreachable(ep.error));
+  const allDown = down.length === eps.length;
+  const asleep = allDown && down.every(([, ep]) => unreachable(ep.error));
   if (asleep) {
     html += `<div class="asleepnote">unreachable — asleep?</div>`;
   } else {
@@ -285,7 +286,7 @@ function renderMachine(m) {
   if (power?.state === "failed" || power?.state === "unconfirmed")
     html += `<div class="err">${power.state === "failed" ? "Sleep failed" : "Sleep unconfirmed"}: ${esc(power.error)} (${esc(new Date(power.at).toLocaleTimeString())})</div>`;
 
-  if (asleep) {
+  if (allDown) {
     const waking = (wakingUntil[m.name] ?? 0) > Date.now();
     if (m.wol) html += `<div class="actions">${waking
       ? `<span class="countdown">waking… (can take a minute)</span>`

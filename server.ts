@@ -239,13 +239,15 @@ async function pollEndpoint(machine: string, ep: EndpointConfig): Promise<void> 
       stdout: "pipe",
       stderr: "pipe",
     });
-    const timer = setTimeout(() => proc.kill(), config.ssh_timeout_ms);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; proc.kill(); }, config.ssh_timeout_ms);
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
     clearTimeout(timer);
+    if (timedOut) throw new Error("Collector connection or command timed out");
     st.duration_ms = Date.now() - started;
     // PowerShell may emit banners/warnings around the payload; take the JSON line.
     const jsonLine = stdout.split("\n").find((l) => l.trimStart().startsWith("{"));
