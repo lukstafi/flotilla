@@ -174,8 +174,9 @@ and enable network wake. Wi-Fi-only machines can use manual wake.
 The API's `sleep_status` map retains `preparing`, `pending`, `executing`, `requested`,
 `failed`, `unconfirmed`, or `cancelled` per machine until the next request or
 server restart. `requested` means the command succeeded, not proof that the
-machine stayed asleep. An SSH disconnect or timeout is unconfirmed; explicit
-errors remain visible in the dashboard and fleet CLI. Unreachability alone
+machine stayed asleep. A disconnect after the remote script acknowledges startup, or an execution
+timeout, is unconfirmed; SSH failures without that acknowledgement and explicit
+command errors remain visible in the dashboard and fleet CLI. Unreachability alone
 cannot distinguish sleep from a network outage. Wake reports packet delivery
 errors, and a successful send still requires the machine to become reachable.
 
