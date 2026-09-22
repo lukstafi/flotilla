@@ -149,8 +149,36 @@ a fallback guess.
 Each machine has a **sleep** button (`flotilla sleep <machine>`, or
 `POST /api/sleep`). The suspend fires after `sleep_delay_s` — a window to power
 off input devices that would otherwise interrupt going to sleep — and is
-cancellable until it fires. macOS sleeps via `pmset sleepnow`; other machines
-suspend their Windows host, WSL included, via `SetSuspendState` over SSH.
+cancellable until it fires. A recent successful collector observation selects the
+currently running native OS: Linux uses `systemctl suspend`, macOS uses
+`pmset sleepnow`, and Windows uses `SetSuspendState`. WSL alone never authorizes
+host suspension. The route is checked again when the countdown expires.
+
+Linux suspend preserves systemd sleep inhibitors and never prompts over SSH.
+For a dedicated fleet account, run the interactive helper **on each Linux box**:
+
+```bash
+bash scripts/setup-linux-power.sh          # suspend permission; manual wake
+bash scripts/setup-linux-power.sh eno1     # also enable Ethernet Wake-on-LAN
+```
+
+Use the Ethernet interface reported by `ip route`, such as `eno1` or `enp130s0`.
+Install `ethtool` and NetworkManager first when configuring Ethernet wake.
+The helper requests your sudo password and installs a narrow polkit rule allowing
+the current user to suspend, including with other login sessions present. It does
+not permit ignoring sleep inhibitors. The optional interface argument enables
+magic-packet wake in its NetworkManager profile and applies it immediately with
+`ethtool`; it does not bounce the connection or reboot. Firmware must also support
+and enable network wake. Wi-Fi-only machines can use manual wake.
+
+The API's `sleep_status` map retains `preparing`, `pending`, `executing`, `requested`,
+`failed`, `unconfirmed`, or `cancelled` per machine until the next request or
+server restart. `requested` means the command succeeded, not proof that the
+machine stayed asleep. A disconnect after the remote script acknowledges startup, or an execution
+timeout, is unconfirmed; SSH failures without that acknowledgement and explicit
+command errors remain visible in the dashboard and fleet CLI. Unreachability alone
+cannot distinguish sleep from a network outage. Wake reports packet delivery
+errors, and a successful send still requires the machine to become reachable.
 
 An unreachable machine's button becomes **wake**: `POST /api/wake` sends
 Wake-on-LAN magic packets to the MACs in its `wol` config over the LAN
@@ -205,6 +233,8 @@ home LAN — and not to the open internet.
 ## Layout
 
 - `server.ts` — the hub: SSH poller, cache, HTML and JSON routes.
+- `power.ts` — native OS routing and cancellable sleep execution.
+- `scripts/setup-linux-power.sh` — optional Linux suspend/Wake-on-LAN setup.
 - `collect/unix.sh` — macOS/Linux/WSL collector (one JSON object on stdout).
 - `collect/windows.ps1` — Windows collector (perf counters).
 - `collect/close-session.sh` — identity-checked session terminator.

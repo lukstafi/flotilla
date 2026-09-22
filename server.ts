@@ -11,6 +11,7 @@
 // Run: bun server.ts   (config: ./flotilla.config.json, or $FLOTILLA_CONFIG)
 
 import { join } from "path";
+import { selectSleepRoute, sleepCommand, runCommand, SleepController } from "./power";
 import { homedir } from "os";
 import { readFileSync, readdirSync, statSync } from "fs";
 
@@ -238,13 +239,15 @@ async function pollEndpoint(machine: string, ep: EndpointConfig): Promise<void> 
       stdout: "pipe",
       stderr: "pipe",
     });
-    const timer = setTimeout(() => proc.kill(), config.ssh_timeout_ms);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; proc.kill(); }, config.ssh_timeout_ms);
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
     clearTimeout(timer);
+    if (timedOut) throw new Error("Collector connection or command timed out");
     st.duration_ms = Date.now() - started;
     // PowerShell may emit banners/warnings around the payload; take the JSON line.
     const jsonLine = stdout.split("\n").find((l) => l.trimStart().startsWith("{"));
@@ -278,36 +281,39 @@ let lastPollAt = 0;
 // Delayed machine sleep: the delay runs here (cancellable) so the user can
 // power off input devices that would otherwise interrupt going to sleep.
 const SLEEP_DELAY_S = config.sleep_delay_s ?? 15;
-const WIN_SUSPEND_SCRIPT = `Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Application]::SetSuspendState([System.Windows.Forms.PowerState]::Suspend, $false, $false)`;
-const pendingSleeps = new Map<string, { sleep_at: string; timer: ReturnType<typeof setTimeout> }>();
+const sleepController = new SleepController(
+  (m) => selectSleepRoute(m, ep => state.get(epKey(m.name, ep.id)) as any,
+    Date.now(), Math.max(60_000, config.poll_interval_s * 3000)),
+  route => runCommand(sleepCommand(route)), SLEEP_DELAY_S * 1000,
+);
 
-function executeSleep(m: MachineConfig): void {
-  pendingSleeps.delete(m.name);
-  if (m.endpoints.some((e) => e.local)) {
-    Bun.spawn(["pmset", "sleepnow"]);
-    return;
-  }
-  // Suspending the Windows host suspends the whole box, WSL included.
-  const win = m.endpoints.find((e) => e.kind === "windows");
-  if (!win) return console.error(`flotilla: no sleep route for ${m.name}`);
-  Bun.spawn(
-    ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", win.host!, "powershell -NoProfile -Command -"],
-    { stdin: Buffer.from(WIN_SUSPEND_SCRIPT), stdout: "ignore", stderr: "ignore" },
-  );
+const sleepPreparations = new Map<string, { cancelled: boolean; result: Promise<{ sleep_at: string }> }>();
+function prepareSleep(m: MachineConfig): Promise<{ sleep_at: string }> {
+  // A duplicate must not wait past its existing countdown and schedule again.
+  if (sleepController.pendingSnapshot()[m.name] || sleepController.status.get(m.name)?.state === "executing")
+    return Promise.resolve(sleepController.schedule(m));
+  const existing = sleepPreparations.get(m.name);
+  if (existing) return existing.result;
+  const preparation = { cancelled: false, result: null! as Promise<{ sleep_at: string }> };
+  sleepPreparations.set(m.name, preparation);
+  sleepController.status.set(m.name, { state: "preparing", at: new Date().toISOString() });
+  preparation.result = (async () => {
+    await (noteClientActivity() ?? polling);
+    if (preparation.cancelled) throw new Error("Sleep cancelled during refresh");
+    lastClientRequest = Date.now();
+    return sleepController.schedule(m);
+  })().catch(error => {
+    if (!preparation.cancelled)
+      sleepController.status.set(m.name, { state: "failed", at: new Date().toISOString(),
+        error: String(error instanceof Error ? error.message : error).slice(0, 400) });
+    throw error;
+  }).finally(() => {
+    if (sleepPreparations.get(m.name) === preparation) sleepPreparations.delete(m.name);
+  });
+  return preparation.result;
 }
 
-function scheduleSleep(m: MachineConfig): { sleep_at: string } {
-  const existing = pendingSleeps.get(m.name);
-  if (existing) return { sleep_at: existing.sleep_at };
-  const sleep_at = new Date(Date.now() + SLEEP_DELAY_S * 1000).toISOString();
-  const timer = setTimeout(() => executeSleep(m), SLEEP_DELAY_S * 1000);
-  pendingSleeps.set(m.name, { sleep_at, timer });
-  console.log(`flotilla: sleep scheduled for ${m.name} at ${sleep_at}`);
-  return { sleep_at };
-}
-
-function sendWake(m: MachineConfig): { sent: string[] } {
+async function sendWake(m: MachineConfig): Promise<{ sent: string[] }> {
   const wol = m.wol!;
   // Magic packet: 6x 0xFF + 16x MAC, UDP to the LAN broadcast (ports 7 and 9).
   const py = `
@@ -322,20 +328,11 @@ for mac in sys.argv[2:]:
         s.sendto(payload, ('255.255.255.255', port))
     s.close()
 `;
-  Bun.spawn(["python3", "-c", py, wol.broadcast, ...wol.macs], { stdout: "ignore", stderr: "ignore" });
+  const result = await runCommand({ argv: ["python3", "-c", py, wol.broadcast, ...wol.macs] });
+  if (result.code !== 0 || result.timedOut) throw new Error(result.stderr.trim() || "Wake packet send failed");
   console.log(`flotilla: wake packets sent for ${m.name} (${wol.macs.join(", ")})`);
   return { sent: wol.macs };
 }
-
-function cancelSleep(name: string): boolean {
-  const pending = pendingSleeps.get(name);
-  if (!pending) return false;
-  clearTimeout(pending.timer);
-  pendingSleeps.delete(name);
-  console.log(`flotilla: sleep cancelled for ${name}`);
-  return true;
-}
-
 
 // Terminate one agent session. Every gate is re-checked server-side: the UI's
 // button is a convenience, not the authority.
@@ -384,23 +381,19 @@ async function closeSession(
   return { status: 200, body: { closed: pid, machine: m.name, endpoint: epId, detail: out.trim() } };
 }
 
-let polling = false;
-async function pollAll(): Promise<void> {
-  if (polling) return; // a slow round must not stack onto the next tick
-  polling = true;
+let polling: Promise<void> | null = null;
+function pollAll(): Promise<void> {
+  if (polling) return polling; // Fresh callers join the same round.
   lastPollAt = Date.now();
   refreshDesktopSessions();
-  try {
-    await Promise.all(
-      config.machines.flatMap((m) => m.endpoints.map((e) => pollEndpoint(m.name, e))),
-    );
-  } finally {
-    polling = false;
-  }
+  polling = Promise.all(
+    config.machines.flatMap((m) => m.endpoints.map((e) => pollEndpoint(m.name, e))),
+  ).then(() => {}).finally(() => { polling = null; });
+  return polling;
 }
 
 function pollTick(): void {
-  if (Date.now() - lastClientRequest > IDLE_AFTER_MS) return; // nobody watching
+  if (Date.now() - lastClientRequest > IDLE_AFTER_MS && !Object.keys(sleepController.pendingSnapshot()).length) return; // nobody watching
   pollAll();
 }
 
@@ -413,6 +406,7 @@ function noteClientActivity(): Promise<void> | null {
 function machineSnapshot(m: MachineConfig) {
   return {
     name: m.name,
+    sleep_status: sleepController.status.get(m.name) ?? null,
     wol: !!m.wol,
     endpoints: Object.fromEntries(
       m.endpoints.map((e) => {
@@ -429,9 +423,9 @@ function fleetSnapshot() {
     updated_at: new Date().toISOString(),
     poll_interval_s: config.poll_interval_s,
     polling: Date.now() - lastClientRequest > IDLE_AFTER_MS ? "paused" : "active",
-    sleep_pending: Object.fromEntries(
-      [...pendingSleeps].map(([name, p]) => [name, p.sleep_at]),
-    ),
+    sleep_pending: sleepController.pendingSnapshot(),
+    sleep_preparing: [...sleepPreparations.keys()],
+    sleep_status: Object.fromEntries(sleepController.status),
     sleep_delay_s: SLEEP_DELAY_S,
     session_idle_s: SESSION_IDLE_S,
     watch: { counts: WATCH_COUNTS, sessions: WATCH_SESSIONS },
@@ -456,11 +450,22 @@ const server = Bun.serve({
       const body = await req.json().catch(() => ({}));
       const m = config.machines.find((x) => x.name === body.machine);
       if (!m) return Response.json({ error: `unknown machine: ${body.machine}` }, { status: 404 });
-      return Response.json({ machine: m.name, ...scheduleSleep(m) });
+      try {
+        return Response.json({ machine: m.name, ...await prepareSleep(m) });
+      } catch (error) {
+        return Response.json({ error: String(error instanceof Error ? error.message : error) }, { status: 409 });
+      }
     }
     if (path === "/api/sleep-cancel" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
-      return Response.json({ machine: body.machine, cancelled: cancelSleep(body.machine) });
+      const preparation = sleepPreparations.get(body.machine);
+      if (preparation) {
+        preparation.cancelled = true;
+        sleepPreparations.delete(body.machine);
+        sleepController.status.set(body.machine, { state: "cancelled", at: new Date().toISOString() });
+      }
+      const cancelled = sleepController.cancel(body.machine);
+      return Response.json({ machine: body.machine, cancelled: !!preparation || cancelled });
     }
     if (path === "/api/wake" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
@@ -468,7 +473,11 @@ const server = Bun.serve({
       if (!m) return Response.json({ error: `unknown machine: ${body.machine}` }, { status: 404 });
       if (!m.wol) return Response.json({ error: `no wol config for ${m.name}` }, { status: 400 });
       lastClientRequest = Date.now(); // keep polling so the wake-up is noticed
-      return Response.json({ machine: m.name, ...sendWake(m) });
+      try {
+        return Response.json({ machine: m.name, ...await sendWake(m) });
+      } catch (error) {
+        return Response.json({ error: String(error instanceof Error ? error.message : error) }, { status: 502 });
+      }
     }
     if (path === "/api/session/close" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));

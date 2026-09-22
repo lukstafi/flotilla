@@ -67,7 +67,7 @@ if (["sleep", "cancel", "wake"].includes(args[0])) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ machine }),
-      signal: AbortSignal.timeout(8000),
+      signal: args[0] === "sleep" ? undefined : AbortSignal.timeout(8000),
     });
   } catch (err) {
     if (args[0] === "wake") { await wakeViaRelay(machine); process.exit(0); }
@@ -76,7 +76,7 @@ if (["sleep", "cancel", "wake"].includes(args[0])) {
   }
   const out = await res.json();
   if (!res.ok) { console.error(`flotilla: ${out.error ?? res.status}`); process.exit(1); }
-  console.log(out.sleep_at ? `${machine} sleeping at ${out.sleep_at} (cancel with: flotilla cancel ${machine})`
+  console.log(out.sleep_at ? `${machine} sleep scheduled for ${out.sleep_at} (cancel with: flotilla cancel ${machine})`
     : out.sent ? `${machine}: wake packets sent to ${out.sent.join(", ")} (allow up to a minute)`
     : out.cancelled ? `${machine}: sleep cancelled` : `${machine}: no pending sleep`);
   process.exit(0);
@@ -107,7 +107,7 @@ const pct = (v) => (v == null ? "–" : `${Math.round(v)}%`);
 for (const m of machines) {
   const eps = Object.entries(m.endpoints);
   const epOf = (id) => m.endpoints[id]?.ok ? m.endpoints[id] : null;
-  const primaryEp = epOf("local") || epOf("win") || epOf("wsl");
+  const primaryEp = epOf("local") || epOf("linux") || epOf("win") || epOf("wsl") || eps.find(([, ep]) => ep.ok)?.[1];
   const primary = primaryEp?.data;
   let gpu = null, gpuEp = null;
   for (const [, ep] of eps) {
@@ -128,6 +128,9 @@ for (const m of machines) {
     ? `gpu ${pct(gpu.util_pct)}${avg5(gpuEp, "gpu_util_pct")}${gpu.mem_used_mb != null ? ` ${(gpu.mem_used_mb / 1024).toFixed(1)}G` : ""}`
     : "gpu –";
   console.log(`${m.name.padEnd(11)} cpu ${pct(primary?.cpu_pct).padStart(4)}${avg5(primaryEp, "cpu_pct").padEnd(9)}  ${gpuStr.padEnd(24)} ${counts}`);
+  const power = m.sleep_status ?? payload.sleep_status?.[m.name];
+  if (power?.state === "failed" || power?.state === "unconfirmed")
+    console.log(`  ! sleep ${power.state}: ${power.error}`);
   for (const [id, ep] of eps) {
     if (!ep.ok) { console.log(`  ! ${id} (${ep.host}): ${ep.error}`); continue; }
     for (const [agent, list] of Object.entries(ep.data.sessions ?? {}))
