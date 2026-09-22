@@ -43,20 +43,25 @@ export function selectSleepRoute(
   return route;
 }
 
+export const SLEEP_ACK = "FLOTILLA_SLEEP_COMMAND_STARTED";
+
 export function sleepCommand(route: SleepRoute): Command {
   const { endpoint: ep, platform } = route;
   let script: string;
   if (platform === "windows") {
-    script = `Add-Type -AssemblyName System.Windows.Forms
+    script = `Write-Output "${SLEEP_ACK}"
+Add-Type -AssemblyName System.Windows.Forms
 if (-not [System.Windows.Forms.Application]::SetSuspendState([System.Windows.Forms.PowerState]::Suspend, $false, $false)) { throw 'SetSuspendState refused suspend' }`;
   } else if (platform === "linux") {
     script = `set -eu
 [ "$(uname -s)" = Linux ] || { echo 'OS changed; refresh before requesting sleep' >&2; exit 2; }
 if grep -qi microsoft /proc/sys/kernel/osrelease; then echo 'Refusing to suspend WSL; use its Windows host' >&2; exit 2; fi
+printf '%s\\n' '${SLEEP_ACK}'
 exec systemctl --no-ask-password --check-inhibitors=yes suspend`;
   } else {
     script = `set -eu
 [ "$(uname -s)" = Darwin ] || { echo 'OS changed; refresh before requesting sleep' >&2; exit 2; }
+printf '%s\\n' '${SLEEP_ACK}'
 exec pmset sleepnow`;
   }
   const shell = platform === "windows" ? ["powershell", "-NoProfile", "-NonInteractive", "-Command", "-"] : ["sh", "-s"];
@@ -119,8 +124,10 @@ export class SleepController {
       const route = this.choose(machine); // State can change during the cancellation window.
       this.status.set(machine.name, { state: "executing", at, endpoint: route.endpoint.id });
       const result = await this.execute(route);
-      const setupFailed = /Permission denied|Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|Could not resolve hostname|Connection refused|No route to host|Network is unreachable|connect to host .* timed out/i.test(result.stderr);
-      const uncertain = !setupFailed && (result.timedOut || (result.code === 255 && !route.endpoint.local));
+      // SSH exit 255 alone says nothing about whether the remote script ran.
+      // The marker precedes the suspend call and avoids guessing from localized diagnostics.
+      const acknowledged = result.stdout.split(/\r?\n/).includes(SLEEP_ACK);
+      const uncertain = result.timedOut || (result.code === 255 && !route.endpoint.local && acknowledged);
       this.status.set(machine.name, { state: uncertain ? "unconfirmed" : result.code === 0 ? "requested" : "failed",
         at, endpoint: route.endpoint.id,
         ...(uncertain || result.code !== 0 ? { error: (result.stderr.trim() ||

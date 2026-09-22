@@ -153,7 +153,7 @@ async function postWake(machine) {
   refresh();
 }
 const unreachable = (err) =>
-  /Operation timed out|Connection timed out|Collector connection or command timed out|No route to host|Connection refused|Network is unreachable/i.test(err ?? "");
+  /Operation timed out|Connection timed out|No route to host|Connection refused|Network is unreachable/i.test(err ?? "");
 function tickCountdowns() {
   for (const el of document.querySelectorAll(".countdown[data-at]")) {
     const left = Math.ceil((Date.parse(el.dataset.at) - Date.now()) / 1000);

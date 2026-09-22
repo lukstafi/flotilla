@@ -20,3 +20,11 @@ test("an offline machine keeps its cancellation control throughout a pending cou
     expect(idle).toContain(wol ? "postWake(" : "Wake manually");
   }
 });
+
+test("a collector timeout stays visible without claiming the machine is asleep", () => {
+  const result = render({ name: "test", wol: false, endpoints: {
+    linux: { ok: false, data: null, error: "Collector connection or command timed out", fetched_at: null },
+  } }, {});
+  expect(result).toContain("Collector connection or command timed out");
+  expect(result).not.toContain("unreachable — asleep?");
+});

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { selectSleepRoute, sleepCommand, SleepController, runCommand, type Endpoint, type Observation } from "../power";
+import { selectSleepRoute, sleepCommand, SleepController, runCommand, SLEEP_ACK, type Endpoint, type Observation } from "../power";
 const now = 100_000;
 const linux: Endpoint = { id: "linux", kind: "unix", host: "test-linux" };
 const wsl: Endpoint = { id: "wsl", kind: "unix", host: "test-wsl" };
@@ -82,14 +82,14 @@ describe("delayed sleep lifecycle", () => {
     expect(f.controller.status.get(machine.name)?.error).toContain("authentication");
   });
   test("definite SSH setup errors are failures", async () => {
-    for (const stderr of ["Permission denied (publickey).", "Host key verification failed.", "ssh: connect to host box port 22: Connection refused"]) {
+    for (const stderr of ["Permission denied (publickey).", "Host key verification failed.", "Connection timed out during banner exchange", "Unrecognized SSH setup diagnostic", "ssh: connect to host box port 22: Connection refused"]) {
       const f = fixture({ code: 255, stdout: "", stderr });
       f.controller.schedule(machine); await f.controller.fire(machine);
       expect(f.controller.status.get(machine.name)?.state).toBe("failed");
     }
   });
   test("SSH loss is unconfirmed rather than a fabricated success/failure", async () => {
-    const f = fixture({ code: 255, stdout: "", stderr: "Connection closed" });
+    const f = fixture({ code: 255, stdout: SLEEP_ACK + "\n", stderr: "Connection closed" });
     f.controller.schedule(machine); await f.controller.fire(machine);
     expect(f.controller.status.get(machine.name)?.state).toBe("unconfirmed");
   });
