@@ -296,12 +296,18 @@ function prepareSleep(m: MachineConfig): Promise<{ sleep_at: string }> {
   if (existing) return existing.result;
   const preparation = { cancelled: false, result: null! as Promise<{ sleep_at: string }> };
   sleepPreparations.set(m.name, preparation);
+  sleepController.status.set(m.name, { state: "preparing", at: new Date().toISOString() });
   preparation.result = (async () => {
     await (noteClientActivity() ?? polling);
     if (preparation.cancelled) throw new Error("Sleep cancelled during refresh");
     lastClientRequest = Date.now();
     return sleepController.schedule(m);
-  })().finally(() => {
+  })().catch(error => {
+    if (!preparation.cancelled)
+      sleepController.status.set(m.name, { state: "failed", at: new Date().toISOString(),
+        error: String(error instanceof Error ? error.message : error).slice(0, 400) });
+    throw error;
+  }).finally(() => {
     if (sleepPreparations.get(m.name) === preparation) sleepPreparations.delete(m.name);
   });
   return preparation.result;
@@ -456,6 +462,7 @@ const server = Bun.serve({
       if (preparation) {
         preparation.cancelled = true;
         sleepPreparations.delete(body.machine);
+        sleepController.status.set(body.machine, { state: "cancelled", at: new Date().toISOString() });
       }
       const cancelled = sleepController.cancel(body.machine);
       return Response.json({ machine: body.machine, cancelled: !!preparation || cancelled });

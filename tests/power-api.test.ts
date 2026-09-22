@@ -45,6 +45,7 @@ esac
     await until(async () => (await snapshot()).sleep_preparing.includes("test"));
     expect((await (await post("/api/sleep-cancel")).json()).cancelled).toBe(true);
     expect((await preparing).status).toBe(409);
+    expect((await snapshot()).sleep_status.test.state).toBe("cancelled");
     expect(existsSync(log)).toBe(false);
     const scheduled = await post("/api/sleep");
     expect(scheduled.status).toBe(200);

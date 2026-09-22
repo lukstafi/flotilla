@@ -15,7 +15,7 @@ export interface SleepRoute { endpoint: Endpoint; platform: "linux" | "darwin" |
 export interface Command { argv: string[]; stdin?: string }
 export interface CommandResult { code: number; stdout: string; stderr: string; timedOut?: boolean }
 export interface SleepStatus {
-  state: "pending" | "executing" | "requested" | "failed" | "unconfirmed" | "cancelled";
+  state: "preparing" | "pending" | "executing" | "requested" | "failed" | "unconfirmed" | "cancelled";
   at: string;
   endpoint?: string;
   error?: string;

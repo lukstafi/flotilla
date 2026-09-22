@@ -171,7 +171,7 @@ magic-packet wake in its NetworkManager profile and applies it immediately with
 `ethtool`; it does not bounce the connection or reboot. Firmware must also support
 and enable network wake. Wi-Fi-only machines can use manual wake.
 
-The API's `sleep_status` map retains `pending`, `executing`, `requested`,
+The API's `sleep_status` map retains `preparing`, `pending`, `executing`, `requested`,
 `failed`, `unconfirmed`, or `cancelled` per machine until the next request or
 server restart. `requested` means the command succeeded, not proof that the
 machine stayed asleep. An SSH disconnect or timeout is unconfirmed; explicit
