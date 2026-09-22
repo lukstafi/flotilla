@@ -46,7 +46,10 @@ esac
     expect((await (await post("/api/sleep-cancel")).json()).cancelled).toBe(true);
     expect((await preparing).status).toBe(409);
     expect(existsSync(log)).toBe(false);
-    expect((await post("/api/sleep")).status).toBe(200);
+    const scheduled = await post("/api/sleep");
+    expect(scheduled.status).toBe(200);
+    const countdown = await scheduled.json();
+    expect(await (await post("/api/sleep")).json()).toEqual(countdown);
     expect((await (await post("/api/sleep-cancel")).json()).cancelled).toBe(true);
     await Bun.sleep(250);
     expect(existsSync(log)).toBe(false);

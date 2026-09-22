@@ -289,6 +289,9 @@ const sleepController = new SleepController(
 
 const sleepPreparations = new Map<string, { cancelled: boolean; result: Promise<{ sleep_at: string }> }>();
 function prepareSleep(m: MachineConfig): Promise<{ sleep_at: string }> {
+  // A duplicate must not wait past its existing countdown and schedule again.
+  if (sleepController.pendingSnapshot()[m.name] || sleepController.status.get(m.name)?.state === "executing")
+    return Promise.resolve(sleepController.schedule(m));
   const existing = sleepPreparations.get(m.name);
   if (existing) return existing.result;
   const preparation = { cancelled: false, result: null! as Promise<{ sleep_at: string }> };
