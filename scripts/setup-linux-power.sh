@@ -24,6 +24,16 @@ read -r -p 'Proceed? [y/N] ' reply
 sudo -v
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
+if [[ -n $iface ]]; then
+  profile=$(nmcli -g GENERAL.CON-UUID device show "$iface")
+  [[ -n $profile && $profile != -- ]] || { echo 'Connect Ethernet first so its active profile can be identified.' >&2; exit 1; }
+  # shellcheck disable=SC2024 # The report belongs in our user-owned temporary directory.
+  sudo ethtool "$iface" > "$scratch/ethtool"
+  cat "$scratch/ethtool"
+  grep -Eq 'Supports Wake-on:.*g' "$scratch/ethtool" || { echo 'NIC does not advertise magic-packet wake.' >&2; exit 1; }
+  printf 'Previous profile wake setting: '
+  nmcli -g 802-3-ethernet.wake-on-lan connection show "$profile"
+fi
 cat > "$scratch/50-flotilla-suspend.rules" <<RULE
 // Flotilla: this account may suspend through logind, but may not ignore inhibitors.
 polkit.addRule(function(action, subject) {
@@ -41,14 +51,6 @@ if sudo test -e "$rule" && ! sudo cmp -s "$scratch/50-flotilla-suspend.rules" "$
 fi
 sudo install -m 0644 -o root -g root "$scratch/50-flotilla-suspend.rules" "$rule"
 if [[ -n $iface ]]; then
-  profile=$(nmcli -g GENERAL.CON-UUID device show "$iface")
-  [[ -n $profile && $profile != -- ]] || { echo 'Connect Ethernet first so its active profile can be identified.' >&2; exit 1; }
-  # shellcheck disable=SC2024 # The report belongs in our user-owned temporary directory.
-  sudo ethtool "$iface" > "$scratch/ethtool"
-  cat "$scratch/ethtool"
-  grep -Eq 'Supports Wake-on:.*g' "$scratch/ethtool" || { echo 'NIC does not advertise magic-packet wake.' >&2; exit 1; }
-  printf 'Previous profile wake setting: '
-  nmcli -g 802-3-ethernet.wake-on-lan connection show "$profile"
   sudo nmcli connection modify "$profile" 802-3-ethernet.wake-on-lan magic
   # Apply immediately without bouncing the connection carrying this session.
   sudo ethtool -s "$iface" wol g

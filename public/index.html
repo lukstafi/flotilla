@@ -290,17 +290,17 @@ function renderMachine(m) {
   if (sleepPreparing.includes(m.name)) {
     html += `<div class="actions"><span class="countdown">checking sleep route…</span>
       <button class="cancel" onclick="postSleep('cancel','${esc(m.name)}')">cancel</button></div>`;
+  } else if (power?.state === "executing") {
+    html += `<div class="actions"><span class="countdown">requesting sleep…</span></div>`;
+  } else if (pendingAt) {
+    html += `<div class="actions"><span class="countdown" data-at="${esc(pendingAt)}">sleeping soon</span>
+       <button class="cancel" onclick="postSleep('cancel','${esc(m.name)}')">cancel</button></div>`;
   } else if (allDown) {
     const waking = (wakingUntil[m.name] ?? 0) > Date.now();
     if (m.wol) html += `<div class="actions">${waking
       ? `<span class="countdown">waking… (can take a minute)</span>`
       : `<button onclick="postWake('${esc(m.name)}')" title="send Wake-on-LAN magic packets">wake</button>`}</div>`;
     else html += `<div class="actions">Wake manually (no Wake-on-LAN configured)</div>`;
-  } else if (power?.state === "executing") {
-    html += `<div class="actions"><span class="countdown">requesting sleep…</span></div>`;
-  } else if (pendingAt) {
-    html += `<div class="actions"><span class="countdown" data-at="${esc(pendingAt)}">sleeping soon</span>
-       <button class="cancel" onclick="postSleep('cancel','${esc(m.name)}')">cancel</button></div>`;
   } else {
     html += `<div class="actions"><button onclick="postSleep('sleep','${esc(m.name)}')" title="suspends after a delay — time to power off input devices">sleep</button></div>`;
   }
