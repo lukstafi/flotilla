@@ -287,6 +287,23 @@ const sleepController = new SleepController(
   route => runCommand(sleepCommand(route)), SLEEP_DELAY_S * 1000,
 );
 
+const sleepPreparations = new Map<string, { cancelled: boolean; result: Promise<{ sleep_at: string }> }>();
+function prepareSleep(m: MachineConfig): Promise<{ sleep_at: string }> {
+  const existing = sleepPreparations.get(m.name);
+  if (existing) return existing.result;
+  const preparation = { cancelled: false, result: null! as Promise<{ sleep_at: string }> };
+  sleepPreparations.set(m.name, preparation);
+  preparation.result = (async () => {
+    await (noteClientActivity() ?? polling);
+    if (preparation.cancelled) throw new Error("Sleep cancelled during refresh");
+    lastClientRequest = Date.now();
+    return sleepController.schedule(m);
+  })().finally(() => {
+    if (sleepPreparations.get(m.name) === preparation) sleepPreparations.delete(m.name);
+  });
+  return preparation.result;
+}
+
 async function sendWake(m: MachineConfig): Promise<{ sent: string[] }> {
   const wol = m.wol!;
   // Magic packet: 6x 0xFF + 16x MAC, UDP to the LAN broadcast (ports 7 and 9).
@@ -398,6 +415,7 @@ function fleetSnapshot() {
     poll_interval_s: config.poll_interval_s,
     polling: Date.now() - lastClientRequest > IDLE_AFTER_MS ? "paused" : "active",
     sleep_pending: sleepController.pendingSnapshot(),
+    sleep_preparing: [...sleepPreparations.keys()],
     sleep_status: Object.fromEntries(sleepController.status),
     sleep_delay_s: SLEEP_DELAY_S,
     session_idle_s: SESSION_IDLE_S,
@@ -424,16 +442,20 @@ const server = Bun.serve({
       const m = config.machines.find((x) => x.name === body.machine);
       if (!m) return Response.json({ error: `unknown machine: ${body.machine}` }, { status: 404 });
       try {
-        await (noteClientActivity() ?? polling);
-        lastClientRequest = Date.now();
-        return Response.json({ machine: m.name, ...sleepController.schedule(m) });
+        return Response.json({ machine: m.name, ...await prepareSleep(m) });
       } catch (error) {
         return Response.json({ error: String(error instanceof Error ? error.message : error) }, { status: 409 });
       }
     }
     if (path === "/api/sleep-cancel" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
-      return Response.json({ machine: body.machine, cancelled: sleepController.cancel(body.machine) });
+      const preparation = sleepPreparations.get(body.machine);
+      if (preparation) {
+        preparation.cancelled = true;
+        sleepPreparations.delete(body.machine);
+      }
+      const cancelled = sleepController.cancel(body.machine);
+      return Response.json({ machine: body.machine, cancelled: !!preparation || cancelled });
     }
     if (path === "/api/wake" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));

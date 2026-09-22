@@ -124,6 +124,7 @@ function meter(label, pct, extra, avg) {
 const avgFor = (ep, field) => ep?.avg ? { m5: ep.avg.m5?.[field], m15: ep.avg.m15?.[field] } : null;
 
 let sleepPending = {};
+let sleepPreparing = [];
 let sleepStatus = {};
 let idleThreshold = 3600;
 let watch = { counts: [], sessions: [] };
@@ -286,7 +287,10 @@ function renderMachine(m) {
   if (power?.state === "failed" || power?.state === "unconfirmed")
     html += `<div class="err">${power.state === "failed" ? "Sleep failed" : "Sleep unconfirmed"}: ${esc(power.error)} (${esc(new Date(power.at).toLocaleTimeString())})</div>`;
 
-  if (allDown) {
+  if (sleepPreparing.includes(m.name)) {
+    html += `<div class="actions"><span class="countdown">checking sleep route…</span>
+      <button class="cancel" onclick="postSleep('cancel','${esc(m.name)}')">cancel</button></div>`;
+  } else if (allDown) {
     const waking = (wakingUntil[m.name] ?? 0) > Date.now();
     if (m.wol) html += `<div class="actions">${waking
       ? `<span class="countdown">waking… (can take a minute)</span>`
@@ -309,6 +313,7 @@ async function refresh() {
     const r = await fetch("/api/fleet");
     const fleet = await r.json();
     sleepPending = fleet.sleep_pending ?? {};
+    sleepPreparing = fleet.sleep_preparing ?? [];
     sleepStatus = fleet.sleep_status ?? {};
     idleThreshold = fleet.session_idle_s ?? 3600;
     watch = fleet.watch ?? { counts: [], sessions: [] };

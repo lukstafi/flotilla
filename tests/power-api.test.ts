@@ -41,6 +41,11 @@ esac
   const post = (path: string) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: '{"machine":"test"}' });
   try {
     await until(async () => (await snapshot()).machines[0].endpoints.linux.ok);
+    const preparing = post("/api/sleep");
+    await until(async () => (await snapshot()).sleep_preparing.includes("test"));
+    expect((await (await post("/api/sleep-cancel")).json()).cancelled).toBe(true);
+    expect((await preparing).status).toBe(409);
+    expect(existsSync(log)).toBe(false);
     expect((await post("/api/sleep")).status).toBe(200);
     expect((await (await post("/api/sleep-cancel")).json()).cancelled).toBe(true);
     await Bun.sleep(250);

@@ -163,6 +163,7 @@ bash scripts/setup-linux-power.sh eno1     # also enable Ethernet Wake-on-LAN
 ```
 
 Use the Ethernet interface reported by `ip route`, such as `eno1` or `enp130s0`.
+Install `ethtool` and NetworkManager first when configuring Ethernet wake.
 The helper requests your sudo password and installs a narrow polkit rule allowing
 the current user to suspend, including with other login sessions present. It does
 not permit ignoring sleep inhibitors. The optional interface argument enables

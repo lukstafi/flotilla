@@ -67,7 +67,7 @@ if (["sleep", "cancel", "wake"].includes(args[0])) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ machine }),
-      signal: AbortSignal.timeout(args[0] === "sleep" ? Math.max(45000, (config.ssh_timeout_ms ?? 30000) + 5000) : 8000),
+      signal: args[0] === "sleep" ? undefined : AbortSignal.timeout(8000),
     });
   } catch (err) {
     if (args[0] === "wake") { await wakeViaRelay(machine); process.exit(0); }
