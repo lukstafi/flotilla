@@ -382,6 +382,7 @@ function noteClientActivity(): Promise<void> | null {
 function machineSnapshot(m: MachineConfig) {
   return {
     name: m.name,
+    sleep_status: sleepController.status.get(m.name) ?? null,
     wol: !!m.wol,
     endpoints: Object.fromEntries(
       m.endpoints.map((e) => {

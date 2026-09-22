@@ -50,6 +50,8 @@ esac
     expect(state.sleep_status.test.endpoint).toBe("linux");
     expect(state.sleep_status.test.error).toContain("authorization required");
     expect(state.sleep_pending).toEqual({});
+    const machine = await (await fetch(base + "/api/fleet/test")).json();
+    expect(machine.sleep_status).toEqual(state.sleep_status.test);
     expect(readFileSync(log, "utf8")).toBe("native-suspend\n");
     expect((await post("/api/wake")).status).toBe(400); // no fabricated WoL capability
   } finally {

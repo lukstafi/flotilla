@@ -128,7 +128,7 @@ for (const m of machines) {
     ? `gpu ${pct(gpu.util_pct)}${avg5(gpuEp, "gpu_util_pct")}${gpu.mem_used_mb != null ? ` ${(gpu.mem_used_mb / 1024).toFixed(1)}G` : ""}`
     : "gpu –";
   console.log(`${m.name.padEnd(11)} cpu ${pct(primary?.cpu_pct).padStart(4)}${avg5(primaryEp, "cpu_pct").padEnd(9)}  ${gpuStr.padEnd(24)} ${counts}`);
-  const power = payload.sleep_status?.[m.name];
+  const power = m.sleep_status ?? payload.sleep_status?.[m.name];
   if (power?.state === "failed" || power?.state === "unconfirmed")
     console.log(`  ! sleep ${power.state}: ${power.error}`);
   for (const [id, ep] of eps) {
