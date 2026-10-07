@@ -86,6 +86,9 @@
   .actions button.cancel { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 50%, transparent); }
   .countdown { font: 12px var(--mono); color: var(--warm); }
   .gpuname { font-size: 11.5px; color: var(--dim); margin-top: -6px; margin-bottom: 6px; }
+  #powerlog { margin-top: 20px; color: var(--dim); font-size: 12px; }
+  #powerlog summary { cursor: pointer; }
+  #powerlog pre { font: 12px var(--mono); color: var(--text); white-space: pre-wrap; margin: 8px 0 0; }
   footer { margin-top: 20px; color: var(--dim); font-size: 12px; }
   footer code { font-family: var(--mono); color: var(--text); }
 </style>
@@ -96,6 +99,7 @@
   <div id="meta">loading…</div>
 </header>
 <div id="grid"></div>
+<details id="powerlog"><summary>power clicks (this browser)</summary><pre></pre></details>
 <footer>agents: <code>curl $FLOTILLA_URL/api/fleet</code></footer>
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -137,14 +141,58 @@ async function powerAction(path, machine) {
   if (!response.ok) throw new Error(result.error ?? `HTTP ${response.status}`);
   return result;
 }
+// Every power click is logged in this browser BEFORE its request leaves, then
+// again with the outcome, so a click that never reached the server still leaves
+// a trace. Each entry is also mirrored to the server's power log (best-effort).
+const POWER_LOG_KEY = "flotilla.powerLog";
+const POWER_LOG_MAX = 200;
+function readPowerLog() {
+  try { return JSON.parse(localStorage.getItem(POWER_LOG_KEY) ?? "[]"); } catch { return []; }
+}
+function logPower(entry) {
+  entry = { at: new Date().toISOString(), ...entry };
+  try { localStorage.setItem(POWER_LOG_KEY, JSON.stringify([...readPowerLog(), entry].slice(-POWER_LOG_MAX))); } catch {}
+  fetch("/api/power-log", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(entry), keepalive: true }).catch(() => {});
+  renderPowerLog();
+}
+// One line per click, newest first: the click's time, then its outcome if any.
+function powerLogLines(log, limit = 20) {
+  const byId = new Map();
+  for (const e of log) {
+    const row = byId.get(e.id) ?? {};
+    byId.set(e.id, e.phase === "click" ? { ...row, click: e } : { ...row, done: e });
+  }
+  return [...byId.values()].filter((r) => r.click).reverse().slice(0, limit).map(({ click, done }) =>
+    `${new Date(click.at).toLocaleString()}  ${click.action} ${click.machine}  ${
+      done ? `${done.outcome} (${((Date.parse(done.at) - Date.parse(click.at)) / 1000).toFixed(1)}s)` : "no reply recorded"}`);
+}
+function renderPowerLog() {
+  const el = document.getElementById("powerlog");
+  if (!el) return;
+  const lines = powerLogLines(readPowerLog());
+  el.querySelector("pre").textContent = lines.length ? lines.join("\n") : "no power clicks recorded in this browser";
+}
+async function loggedPowerAction(action, path, machine) {
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  logPower({ id, phase: "click", action, machine });
+  try {
+    const result = await powerAction(path, machine);
+    logPower({ id, phase: "done", action, machine, outcome: "ok" + (result.sleep_at ? ` sleep_at ${result.sleep_at}` : "") });
+    return result;
+  } catch (error) {
+    logPower({ id, phase: "done", action, machine, outcome: "error: " + error.message });
+    throw error;
+  }
+}
 async function postSleep(action, machine) {
-  try { await powerAction(action === "sleep" ? "/api/sleep" : "/api/sleep-cancel", machine); }
+  try { await loggedPowerAction(action, action === "sleep" ? "/api/sleep" : "/api/sleep-cancel", machine); }
   catch (error) { flash("sleep request failed: " + error.message); }
   refresh();
 }
 async function postWake(machine) {
   try {
-    await powerAction("/api/wake", machine);
+    await loggedPowerAction("wake", "/api/wake", machine);
     wakingUntil[machine] = Date.now() + 90000;
   } catch (error) {
     delete wakingUntil[machine];
@@ -328,6 +376,7 @@ async function refresh() {
 }
 refresh();
 setInterval(refresh, 10000);
+renderPowerLog();
 </script>
 </body>
 </html>

@@ -84,6 +84,7 @@ re-read per request, but the server itself is not.
 | `poll_interval_s` | seconds between rounds (default 15) |
 | `idle_after_s` | stop measuring after this long without a client (default 90) |
 | `sleep_delay_s` | cancellable delay before a machine suspends (default 15) |
+| `power_log` | where dashboard power clicks are appended (default `~/.local/state/flotilla/power-clicks.jsonl`) |
 | `session_idle_s` | how quiet a session must be to be closable (default 3600) |
 | `watch.counts` | process names to tally — one `pgrep` each, so a long list is fine |
 | `watch.sessions` | process names to list — a `ps` and a cwd lookup per match, so keep it short |
@@ -179,6 +180,18 @@ timeout, is unconfirmed; SSH failures without that acknowledgement and explicit
 command errors remain visible in the dashboard and fleet CLI. Unreachability alone
 cannot distinguish sleep from a network outage. Wake reports packet delivery
 errors, and a successful send still requires the machine to become reachable.
+
+That map holds only each machine's latest request, and a click that never
+reached the server leaves nothing in it. So the dashboard logs every sleep,
+cancel and wake click in the browser **before** sending it, then again with the
+outcome: the **power clicks** panel under the grid shows this browser's last 20.
+Each entry is also mirrored to `POST /api/power-log`, which appends it to
+`power_log` with the client address, so "did that button press ever happen?"
+can be answered on the hub across browsers:
+
+```bash
+tail ~/.local/state/flotilla/power-clicks.jsonl
+```
 
 An unreachable machine's button becomes **wake**: `POST /api/wake` sends
 Wake-on-LAN magic packets to the MACs in its `wol` config over the LAN
