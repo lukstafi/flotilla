@@ -7,13 +7,14 @@
 //   GET /api/fleet/<machine>  one machine (e.g. /api/fleet/rog)
 //   GET /healthz              liveness probe
 //   POST /api/session/close   terminate one idle Claude session (see closeSession)
+//   POST /api/power-log       append one dashboard power click (see appendPowerLog)
 //
 // Run: bun server.ts   (config: ./flotilla.config.json, or $FLOTILLA_CONFIG)
 
-import { join } from "path";
+import { dirname, join } from "path";
 import { selectSleepRoute, sleepCommand, runCommand, SleepController } from "./power";
 import { homedir } from "os";
-import { readFileSync, readdirSync, statSync } from "fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
 
 const ROOT = import.meta.dir;
 
@@ -38,6 +39,7 @@ interface FleetConfig {
   ssh_timeout_ms: number;
   idle_after_s?: number;
   sleep_delay_s?: number;
+  power_log?: string;     // where dashboard power clicks are appended (JSONL)
   session_idle_s?: number;
   server_url?: string;    // what clients elsewhere should call; defaults to localhost
   desktop_store?: string; // Claude Desktop's session directory, if not the macOS default
@@ -281,6 +283,24 @@ let lastPollAt = 0;
 // Delayed machine sleep: the delay runs here (cancellable) so the user can
 // power off input devices that would otherwise interrupt going to sleep.
 const SLEEP_DELAY_S = config.sleep_delay_s ?? 15;
+
+// The dashboard's power clicks, mirrored from its in-browser log (one JSON line
+// each, a "click" before the request and a "done" with its outcome), so the
+// question "did that button press ever happen?" has an answer on the hub.
+const POWER_LOG = config.power_log ?? join(homedir(), ".local", "state", "flotilla", "power-clicks.jsonl");
+function appendPowerLog(body: any, from: string | undefined): string | null {
+  const str = (v: unknown, max: number) => typeof v === "string" && v.length > 0 && v.length <= max;
+  if (!body || typeof body !== "object") return "body must be a JSON object";
+  if (!str(body.id, 64) || !str(body.machine, 64) || !str(body.at, 40)) return "id, machine and at are required";
+  if (!["sleep", "cancel", "wake"].includes(body.action)) return `bad action: ${body.action}`;
+  if (!["click", "done"].includes(body.phase)) return `bad phase: ${body.phase}`;
+  if (body.outcome !== undefined && !str(body.outcome, 400)) return "outcome must be a short string";
+  const { id, at, phase, action, machine, outcome } = body;
+  mkdirSync(dirname(POWER_LOG), { recursive: true });
+  appendFileSync(POWER_LOG, JSON.stringify({ received_at: new Date().toISOString(), from, id, at, phase, action, machine,
+    ...(outcome === undefined ? {} : { outcome }) }) + "\n");
+  return null;
+}
 const sleepController = new SleepController(
   (m) => selectSleepRoute(m, ep => state.get(epKey(m.name, ep.id)) as any,
     Date.now(), Math.max(60_000, config.poll_interval_s * 3000)),
@@ -438,7 +458,7 @@ const indexHtml = Bun.file(join(ROOT, "public", "index.html"));
 const server = Bun.serve({
   port: config.port,
   hostname: "0.0.0.0",
-  async fetch(req) {
+  async fetch(req, srv) {
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
     if (path === "/" || path === "/index.html") {
@@ -466,6 +486,10 @@ const server = Bun.serve({
       }
       const cancelled = sleepController.cancel(body.machine);
       return Response.json({ machine: body.machine, cancelled: !!preparation || cancelled });
+    }
+    if (path === "/api/power-log" && req.method === "POST") {
+      const error = appendPowerLog(await req.json().catch(() => null), srv.requestIP(req)?.address);
+      return error ? Response.json({ error }, { status: 400 }) : Response.json({ ok: true });
     }
     if (path === "/api/wake" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
