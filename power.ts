@@ -44,6 +44,11 @@ export function selectSleepRoute(
 }
 
 export const SLEEP_ACK = "FLOTILLA_SLEEP_COMMAND_STARTED";
+// A requested `pmset sleepnow` overrides every assertion, so the script must
+// refuse itself while a running fleet batch holds its caffeinate guard
+// (lukstafi/ludics wake-lab.sh MAC_GUARD_ERE). Only caffeinate holders count:
+// Electron apps hold PreventUserIdleSystemSleep permanently.
+export const MAC_GUARD_ERE = String.raw`^[[:space:]]*pid [0-9]+\(caffeinate\):.*(PreventSystemSleep|PreventUserIdleSystemSleep)`;
 
 export function sleepCommand(route: SleepRoute): Command {
   const { endpoint: ep, platform } = route;
@@ -61,6 +66,12 @@ exec systemctl --no-ask-password --check-inhibitors=yes suspend`;
   } else {
     script = `set -eu
 [ "$(uname -s)" = Darwin ] || { echo 'OS changed; refresh before requesting sleep' >&2; exit 2; }
+a=$(pmset -g assertions) || { echo 'Cannot read the sleep assertions (pmset -g assertions failed); refusing to sleep' >&2; exit 2; }
+g=$(printf '%s\\n' "$a" | grep -E '${MAC_GUARD_ERE}') || [ $? -eq 1 ] || { echo 'Cannot scan the sleep assertions; refusing to sleep' >&2; exit 2; }
+if [ -n "$g" ]; then
+  { echo 'Refusing to sleep: caffeinate holds a sleep assertion (a fleet batch may be running):'; printf '%s\\n' "$g" | sed 's/^[[:space:]]*//'; } >&2
+  exit 3
+fi
 printf '%s\\n' '${SLEEP_ACK}'
 exec pmset sleepnow`;
   }

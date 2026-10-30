@@ -155,6 +155,13 @@ currently running native OS: Linux uses `systemctl suspend`, macOS uses
 `pmset sleepnow`, and Windows uses `SetSuspendState`. WSL alone never authorizes
 host suspension. The route is checked again when the countdown expires.
 
+A requested `pmset sleepnow` overrides every macOS sleep assertion, so the macOS
+script checks first: it refuses (exit 3, before acknowledging startup) while any
+`caffeinate` process holds `PreventSystemSleep` or `PreventUserIdleSystemSleep` —
+the guard a running fleet-worker batch takes — and names the holders in the
+`failed` status. It also refuses when `pmset -g assertions` cannot be read. Other
+holders, such as Electron apps' permanent idle-sleep assertions, do not count.
+
 Linux suspend preserves systemd sleep inhibitors and never prompts over SSH.
 For a dedicated fleet account, run the interactive helper **on each Linux box**:
 
