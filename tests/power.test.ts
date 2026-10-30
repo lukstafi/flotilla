@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { selectSleepRoute, sleepCommand, SleepController, runCommand, SLEEP_ACK, type Endpoint, type Observation } from "../power";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { selectSleepRoute, sleepCommand, SleepController, runCommand, SLEEP_ACK, MAC_GUARD_ERE, type Endpoint, type Observation } from "../power";
 const now = 100_000;
 const linux: Endpoint = { id: "linux", kind: "unix", host: "test-linux" };
 const wsl: Endpoint = { id: "wsl", kind: "unix", host: "test-wsl" };
@@ -42,6 +45,69 @@ describe("physical OS routing", () => {
     expect(command.stdin).toContain("--no-ask-password");
     expect(command.stdin).not.toContain("sudo");
     expect(command.argv).toContain("BatchMode=yes");
+  });
+});
+
+describe("macOS sleep guard", () => {
+  const script = sleepCommand({ endpoint: { ...linux, local: true }, platform: "darwin" }).stdin!;
+  const header = `Listed by owning process:
+   pid 651(Claude): [0x0002d71b0001a705] 01:30:27 NoIdleSleepAssertion named: "Electron"
+   pid 412(runningboardd): [0x0002e1c400018a01] 00:05:12 PreventUserIdleSystemSleep named: "app<application.com.example>:Background"
+   pid 358(powerd): [0x00023dd700018bb1] 12:24:22 PreventUserIdleSystemSleep named: "Powerd - Prevent sleep while display is on"
+`;
+  const caffeinate = "   pid 90210(caffeinate): [0x0002f00000018c00] 00:42:00 PreventSystemSleep named: \"caffeinate command-line tool\"\n";
+  async function run(listing: string, pmsetCode = 0) {
+    const dir = mkdtempSync(join(tmpdir(), "flotilla-pmset-"));
+    try {
+      writeFileSync(join(dir, "listing"), listing);
+      writeFileSync(join(dir, "uname"), "#!/bin/sh\necho Darwin\n");
+      writeFileSync(join(dir, "pmset"), `#!/bin/sh
+if [ "$1" = -g ]; then cat "${join(dir, "listing")}"; exit ${pmsetCode}; fi
+echo "fake pmset $*"
+`);
+      for (const tool of ["uname", "pmset"]) chmodSync(join(dir, tool), 0o755);
+      const proc = Bun.spawn(["sh", "-s"], { stdin: Buffer.from(script), stdout: "pipe", stderr: "pipe",
+        env: { PATH: `${dir}:/usr/bin:/bin` } });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      return { code, stdout, stderr };
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+  test("the check reads caffeinate assertions and refuses before the ack", () => {
+    expect(script).toContain("pmset -g assertions");
+    expect(script).toContain(MAC_GUARD_ERE);
+    expect(script.indexOf("exit 3")).toBeGreaterThan(-1);
+    expect(script.indexOf("exit 3")).toBeLessThan(script.indexOf(SLEEP_ACK));
+    expect(script.indexOf(SLEEP_ACK)).toBeLessThan(script.indexOf("pmset sleepnow"));
+  });
+  test("Electron and runningboardd assertions do not block sleep", async () => {
+    const r = await run(header);
+    expect(r.code).toBe(0);
+    expect(r.stdout.split("\n")).toEqual([SLEEP_ACK, "fake pmset sleepnow", ""]);
+  });
+  test("a caffeinate PreventSystemSleep refuses and names the holder", async () => {
+    const r = await run(header + caffeinate);
+    expect(r.code).toBe(3);
+    expect(r.stdout).not.toContain(SLEEP_ACK);
+    expect(r.stdout).not.toContain("sleepnow");
+    expect(r.stderr).toContain("Refusing to sleep");
+    expect(r.stderr).toContain("pid 90210(caffeinate): [0x0002f00000018c00] 00:42:00 PreventSystemSleep");
+    expect(r.stderr).not.toContain("runningboardd");
+  });
+  test("unreadable assertions refuse", async () => {
+    const r = await run("", 1);
+    expect(r.code).toBe(2);
+    expect(r.stdout).not.toContain(SLEEP_ACK);
+    expect(r.stderr).toContain("Cannot read the sleep assertions");
+  });
+  test("the refusal surfaces as a failed sleep_status with the holder lines", async () => {
+    const result = await run(header + caffeinate);
+    const controller = new SleepController(() => ({ endpoint: { ...linux, local: true }, platform: "darwin" }),
+      async () => result, 0, () => now, () => 1, () => {});
+    controller.schedule(machine); await controller.fire(machine);
+    const status = controller.status.get(machine.name);
+    expect(status?.state).toBe("failed");
+    expect(status?.error).toContain("pid 90210(caffeinate)");
   });
 });
 
