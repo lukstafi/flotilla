@@ -69,8 +69,16 @@ machine, and `bash` (macOS/Linux/WSL) or `powershell` (Windows) on the far end.
 Adding a machine is an entry in the config; nothing else.
 
 For autostart on macOS, adapt `launchd/com.lukstafi.flotilla.plist.example`.
-After editing `server.ts`, restart it — the collectors and the dashboard page are
-re-read per request, but the server itself is not.
+After editing `server.ts` or `flotilla.config.json`, or pulling a new version,
+restart it — the collectors and the dashboard page are re-read per request, but
+the server and its config are read once, at startup. Under that launchd agent:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.lukstafi.flotilla
+```
+
+`-k` kills the running server and starts it again, picking up whatever the
+checkout now holds; its log is wherever the plist's `StandardOutPath` points.
 
 ## Configuration
 
