@@ -102,6 +102,18 @@ if (asJson) {
 }
 
 const machines = payload.machines ?? [payload];
+const waves = payload.waves;
+if (waves) {
+  if (waves.error) console.log(`waves: ${waves.error}`);
+  if (waves.halt) console.log(`HALTED: ${waves.halt}`);
+  for (const w of waves.waves.filter((w) => w.active)) {
+    console.log(`${w.wave}  ${w.active} active / ${w.tasks}`);
+    for (const [k, note] of Object.entries(w.notes ?? {})) if (k.startsWith("gate")) console.log(`  ! ${note}`);
+  }
+  for (const t of waves.unplaced ?? []) console.log(`  ${t.task} on ${t.agent_host} (not in config): ${t.state}`);
+  if (waves.executions_error) console.log(`  ! reservations stale: ${waves.executions_error}`);
+}
+const execStr = (x) => `[${x.kind === "measurement" ? "measuring" : x.standing ? "iterate" : "check"} ${x.state}]`;
 const pct = (v) => (v == null ? "–" : `${Math.round(v)}%`);
 
 for (const m of machines) {
@@ -137,7 +149,17 @@ for (const m of machines) {
       for (const s of list) {
         const idle = s.quiet_s != null && s.closable ? `  idle ${Math.round(s.quiet_s / 3600)}h` : "";
         const gone = s.cwd_deleted ? "  [no worktree]" : "";
-        console.log(`  ${agent} pid ${s.pid} up ${s.etime || "?"}  ${s.title || s.cwd || s.cmd}${gone}${idle}`);
+        const wave = s.wave ? `  [${s.wave.task} ${s.wave.terminal ? "finished: " : ""}${s.wave.state}]` : "";
+        console.log(`  ${agent} pid ${s.pid} up ${s.etime || "?"}  ${s.title || s.cwd || s.cmd}${gone}${idle}${wave}`);
       }
+  }
+  const v = m.wave;
+  if (v) {
+    // The server pairs each task with its reservations (waves.ts, reservationOf).
+    const mine = (t) => (t.executions ?? []).map(execStr).join(" ");
+    for (const t of v.tasks) console.log(`  wave ${t.task} ${t.state || "–"}  ${t.issue ?? ""}${t.pr ? " pr " + t.pr : ""} ${mine(t)}`);
+    for (const t of v.visiting) console.log(`  wave ${t.task} runs here, agent on ${t.agent_host}  ${t.issue ?? ""} ${mine(t)}`);
+    for (const x of v.unmatched ?? [])
+      console.log(`  wave exec ${x.issue ?? x.request_id} ${execStr(x)}${x.agent_host ? " agent on " + x.agent_host : ""}`);
   }
 }

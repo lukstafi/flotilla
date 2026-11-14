@@ -9,12 +9,17 @@
 //   POST /api/session/close   terminate one idle Claude session (see closeSession)
 //   POST /api/power-log       append one dashboard power click (see appendPowerLog)
 //
+// With a Ludics anchor's state on this host, the snapshot also carries issue-wave
+// status (waves.ts): per machine, the wave tasks and execution reservations on it,
+// and per session, the wave task its worktree belongs to.
+//
 // Run: bun server.ts   (config: ./flotilla.config.json, or $FLOTILLA_CONFIG)
 
 import { dirname, join } from "path";
 import { selectSleepRoute, sleepCommand, runCommand, SleepController } from "./power";
+import { WaveReader, machineWaveView, unplacedTasks, type WavesConfig } from "./waves";
 import { homedir } from "os";
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
 
 const ROOT = import.meta.dir;
 
@@ -44,6 +49,7 @@ interface FleetConfig {
   server_url?: string;    // what clients elsewhere should call; defaults to localhost
   desktop_store?: string; // Claude Desktop's session directory, if not the macOS default
   watch?: WatchConfig;
+  waves?: WavesConfig | false; // Ludics issue-wave status; see waves.ts
   machines: MachineConfig[];
 }
 
@@ -64,6 +70,12 @@ const config: FleetConfig = await Bun.file(CONFIG_PATH).json().catch((err) => {
 // that lists cargo and aider instead is a first-class setup.
 const WATCH_COUNTS = config.watch?.counts ?? ["dune"];
 const WATCH_SESSIONS = config.watch?.sessions ?? ["claude", "codex"];
+
+// Wave status is on when configured, or when this host holds a Ludics anchor's
+// state at the default place; `"waves": false` turns it off.
+const waveReader = config.waves === false ? null
+  : config.waves || existsSync(join(homedir(), ".local", "state", "issue-wave", "boards"))
+    ? new WaveReader(config.waves || {}, homedir(), config.machines) : null;
 
 const UNIX_SCRIPT = join(ROOT, "collect", "unix.sh");
 const WIN_SCRIPT = join(ROOT, "collect", "windows.ps1");
@@ -178,12 +190,13 @@ refreshDesktopSessions();
 
 // cwd is the only field the desktop and a process scan can agree on — the
 // desktop's sshRemoteProcessId is an internal UUID, not an OS pid.
-function decorateSessions(data: any) {
+function decorateSessions(data: any, machine: string) {
   if (!data?.sessions) return data;
   const now = Date.now();
   const withState = (arr: any[], agent: string) => (arr ?? []).map((s: any) => {
     const desk = agent === "claude" && s.cwd ? desktopByCwd.get(s.cwd) : undefined;
     const quiet_s = desk ? Math.round((now - desk.last_activity) / 1000) : null;
+    const t = waveReader?.taskForSession(machine, s.cwd);
     return {
       ...s,
       quiet_s,
@@ -191,6 +204,8 @@ function decorateSessions(data: any) {
       closable: agent === "claude" && quiet_s != null && quiet_s >= SESSION_IDLE_S,
       title: s.kind === "app-server" ? "Codex App (shared server)" : desk?.title ?? null,
       branch: desk?.branch ?? null, archived: desk?.archived ?? null,
+      // A terminal task under a resident session is work finished but still holding the box.
+      wave: t ? { wave: t.wave, task: t.task, issue: t.issue, pr: t.pr, state: t.state, terminal: t.terminal } : null,
     };
   });
   return {
@@ -366,7 +381,7 @@ async function closeSession(
   if (ep.kind !== "unix") return { status: 400, body: { error: "closing is only wired for unix endpoints" } };
 
   const st = state.get(epKey(m.name, ep.id));
-  const data: any = st?.ok ? decorateSessions(st.data) : null;
+  const data: any = st?.ok ? decorateSessions(st.data, m.name) : null;
   const sess = (data?.sessions?.claude ?? []).find((s: any) => s.pid === pid);
   if (!sess) return { status: 404, body: { error: `no Claude session with pid ${pid} on ${m.name}/${epId}` } };
   if (!sess.closable)
@@ -406,9 +421,10 @@ function pollAll(): Promise<void> {
   if (polling) return polling; // Fresh callers join the same round.
   lastPollAt = Date.now();
   refreshDesktopSessions();
-  polling = Promise.all(
-    config.machines.flatMap((m) => m.endpoints.map((e) => pollEndpoint(m.name, e))),
-  ).then(() => {}).finally(() => { polling = null; });
+  polling = Promise.all([
+    ...config.machines.flatMap((m) => m.endpoints.map((e) => pollEndpoint(m.name, e))),
+    waveReader?.refresh(),
+  ]).then(() => {}).finally(() => { polling = null; });
   return polling;
 }
 
@@ -428,11 +444,12 @@ function machineSnapshot(m: MachineConfig) {
     name: m.name,
     sleep_status: sleepController.status.get(m.name) ?? null,
     wol: !!m.wol,
+    wave: machineWaveView(waveReader?.snapshot ?? null, config.machines, m.name),
     endpoints: Object.fromEntries(
       m.endpoints.map((e) => {
         const key = epKey(m.name, e.id);
         const st = state.get(key)!;
-        return [e.id, { kind: e.kind, host: e.host ?? "local", ...st, data: decorateSessions(st.data), avg: windowAverages(key) }];
+        return [e.id, { kind: e.kind, host: e.host ?? "local", ...st, data: decorateSessions(st.data, m.name), avg: windowAverages(key) }];
       }),
     ),
   };
@@ -449,6 +466,8 @@ function fleetSnapshot() {
     sleep_delay_s: SLEEP_DELAY_S,
     session_idle_s: SESSION_IDLE_S,
     watch: { counts: WATCH_COUNTS, sessions: WATCH_SESSIONS },
+    waves: waveReader?.snapshot
+      ? { ...waveReader.snapshot, unplaced: unplacedTasks(waveReader.snapshot, config.machines) } : null,
     machines: config.machines.map(machineSnapshot),
   };
 }
