@@ -218,12 +218,18 @@ export class WaveReader {
     const now = Date.now();
     const byWorktree = new Map<string, WaveTask>();
     const recent: NonNullable<ReturnType<typeof parseBoard>>[] = [];
-    // Oldest first, so a worktree reused by a later wave resolves to the later task.
+    // A worktree reused by a later wave resolves to the task written last. The
+    // row's own updated_at decides, not its board's mtime: a gate note on an old
+    // board must not hand its finished task back a worktree a newer wave reuses.
+    const written = (t: WaveTask, b: { updated_at: string | null }) => t.updated_at ?? b.updated_at ?? "";
+    const writtenAt = new Map<string, string>();
     for (const { mtime, board } of [...this.boards.values()].sort((a, b) => a.mtime - b.mtime)) {
       if (!board) continue;
       for (const t of board.tasks) {
         const m = machineForBox(this.machines, t.agent_host);
-        if (t.worktree && m) byWorktree.set(`${m}\0${t.worktree}`, t);
+        if (!t.worktree || !m) continue;
+        const key = `${m}\0${t.worktree}`, at = written(t, board);
+        if (at >= (writtenAt.get(key) ?? "")) { byWorktree.set(key, t); writtenAt.set(key, at); }
       }
       if (now - mtime <= this.recentMs) recent.push(board);
     }
@@ -252,16 +258,26 @@ export class WaveReader {
 
   private async readExecutions(): Promise<void> {
     try {
+      // Its own process group, so the deadline ends every process the verb
+      // started; and the deadline races the reads, since a descendant that
+      // escaped the group would otherwise hold the pipes, and this refresh
+      // shares pollAll()'s promise with every endpoint.
       const proc = Bun.spawn(["bash", this.fleetWorker, "execution", "list", "--active", "--compact"], {
-        stdout: "pipe", stderr: "pipe", stdin: "ignore",
+        stdout: "pipe", stderr: "pipe", stdin: "ignore", detached: true,
       });
-      let timedOut = false;
-      const timer = setTimeout(() => { timedOut = true; proc.kill(); }, this.timeoutMs);
-      const [out, err, code] = await Promise.all([
+      const collected = Promise.all([
         new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
       ]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), this.timeoutMs); });
+      const result = await Promise.race([collected, deadline]);
       clearTimeout(timer);
-      if (timedOut) throw new Error("execution list timed out");
+      if (!result) {
+        try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
+        collected.catch(() => {});
+        throw new Error(`execution list timed out after ${this.timeoutMs} ms`);
+      }
+      const [out, err, code] = result;
       if (code !== 0) throw new Error(`execution list exit ${code}: ${(err.trim() || out.trim()).slice(0, 200)}`);
       this.executions = parseExecutions(out.slice(out.indexOf("[")));
       this.executionsError = null;

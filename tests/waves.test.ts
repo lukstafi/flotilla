@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -102,6 +102,60 @@ test("a failing registry keeps the last good reservations and says they are stal
   expect(reader.snapshot!.executions.map((x) => x.request_id)).toEqual(["r1"]);
   expect(reader.snapshot!.executions_error).toContain("boom");
   expect(reader.snapshot!.halt).toContain("id=h1");
+});
+
+test("the deadline bounds the registry read even when a descendant holds its pipes", async () => {
+  const { dir } = fixture(`sleep 31.7 & sleep 31.7`);
+  const reader = new WaveReader({ state_dir: dir, fleet_worker: join(dir, "fw.sh"), timeout_ms: 300 }, "/home", machines);
+  const started = Date.now();
+  await reader.refresh();
+  expect(Date.now() - started).toBeLessThan(2000);
+  expect(reader.snapshot!.executions_error).toContain("timed out");
+  // SIGKILL is delivered at once but reaped a moment later.
+  let left = "";
+  for (let i = 0; i < 20; i++) {
+    left = Bun.spawnSync(["pgrep", "-f", "sleep 31.7"]).stdout.toString().trim();
+    if (!left) break;
+    await Bun.sleep(50);
+  }
+  expect(left).toBe("");
+});
+
+test("a reused worktree resolves to the task written last, whatever board was touched last", async () => {
+  const { dir, reader } = fixture(`echo '[]'`);
+  const row = (task: string, state: string, at: string) =>
+    ({ task, updated_at: at, fields: { agent_host: "rog-nv-linux", worktree: "/w/reused", state } });
+  writeFileSync(join(dir, "boards", "old.json"), JSON.stringify({ wave: "old", updated_at: "2026-11-15T00:00:00Z",
+    notes: { gate_rog: "a note added after the newer wave started" }, tasks: [row("t-old", "merged #1 at abc", "2026-11-01T00:00:00Z")] }));
+  writeFileSync(join(dir, "boards", "new.json"), JSON.stringify({ wave: "new", updated_at: "2026-11-10T00:00:00Z",
+    tasks: [row("t-new", "launched", "2026-11-10T00:00:00Z")] }));
+  utimesSync(join(dir, "boards", "new.json"), new Date("2026-11-10"), new Date("2026-11-10"));
+  utimesSync(join(dir, "boards", "old.json"), new Date("2026-11-15"), new Date("2026-11-15"));
+  await reader.refresh();
+  expect(reader.taskForSession("rog", "/w/reused")).toMatchObject({ task: "t-new", terminal: false });
+});
+
+test("the CLI shows a reservation with no issue beside a task with no issue", async () => {
+  const machine = {
+    name: "rog", endpoints: {},
+    wave: {
+      tasks: [{ task: "t1", state: "launched", issue: null }], visiting: [],
+      executions: [{ request_id: "measure-1", issue: null, kind: "measurement", state: "dispatched", standing: false }],
+    },
+  };
+  const server = Bun.serve({ port: 0, fetch: () => Response.json(machine) });
+  try {
+    const proc = Bun.spawn(["bun", new URL("../bin/flotilla", import.meta.url).pathname, "rog"], {
+      env: { ...process.env, FLOTILLA_URL: `http://localhost:${server.port}`, FLOTILLA_CONFIG: "/nonexistent" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const out = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    expect(out).toContain("wave t1 launched");
+    expect(out).toContain("wave exec measure-1 [measuring dispatched]");
+  } finally {
+    server.stop(true);
+  }
 });
 
 test("a host without anchor state reports it instead of failing", async () => {
