@@ -66,6 +66,28 @@ test("a machine sees its own tasks, tasks that only execute there, and its reser
   expect(unplacedTasks(snap, machines).map((t) => t.task)).toEqual(["c"]);
 });
 
+// A task retried in a new wave, the old wave's measurement still held for the
+// same issue, and a task and a reservation that both name no issue.
+function pairingSnapshot(): any {
+  const fresh = parseBoard(board("new", [
+    ["t-new", { agent_host: "rog-nv-linux", issue: "o/r#1", state: "launched" }],
+    ["t-bare", { agent_host: "rog-nv-linux", state: "launched" }],
+  ]))!.tasks;
+  const executions = parseExecutions(JSON.stringify([
+    { request_id: "new-iter", state: "launching", request: { wave: "new", issue: "o/r#1", kind: "correctness", standing: true, execution_host: "rog-nv-linux" } },
+    { request_id: "old-measure", state: "dispatched", request: { wave: "old", issue: "o/r#1", kind: "measurement", execution_host: "rog-nv-linux" } },
+    { request_id: "bare-measure", state: "dispatched", request: { kind: "measurement", execution_host: "rog-nv-linux" } },
+  ]));
+  return { tasks: fresh, executions };
+}
+
+test("a reservation pairs with its task by issue and wave, and an issue-less one with none", () => {
+  const rog = machineWaveView(pairingSnapshot(), machines, "rog")!;
+  const own = Object.fromEntries(rog.tasks.map((t) => [t.task, t.executions.map((x) => x.request_id)]));
+  expect(own).toEqual({ "t-new": ["new-iter"], "t-bare": [] });
+  expect(rog.unmatched.map((x) => x.request_id)).toEqual(["old-measure", "bare-measure"]);
+});
+
 function fixture(fleetWorker: string) {
   const dir = mkdtempSync(join(tmpdir(), "flotilla-waves-"));
   mkdirSync(join(dir, "boards"));
@@ -135,14 +157,8 @@ test("a reused worktree resolves to the task written last, whatever board was to
   expect(reader.taskForSession("rog", "/w/reused")).toMatchObject({ task: "t-new", terminal: false });
 });
 
-test("the CLI shows a reservation with no issue beside a task with no issue", async () => {
-  const machine = {
-    name: "rog", endpoints: {},
-    wave: {
-      tasks: [{ task: "t1", state: "launched", issue: null }], visiting: [],
-      executions: [{ request_id: "measure-1", issue: null, kind: "measurement", state: "dispatched", standing: false }],
-    },
-  };
+test("the CLI prints the server's pairing: an old wave's and an issue-less reservation stand alone", async () => {
+  const machine = { name: "rog", endpoints: {}, wave: machineWaveView(pairingSnapshot(), machines, "rog") };
   const server = Bun.serve({ port: 0, fetch: () => Response.json(machine) });
   try {
     const proc = Bun.spawn(["bun", new URL("../bin/flotilla", import.meta.url).pathname, "rog"], {
@@ -151,8 +167,10 @@ test("the CLI shows a reservation with no issue beside a task with no issue", as
     });
     const out = await new Response(proc.stdout).text();
     expect(await proc.exited).toBe(0);
-    expect(out).toContain("wave t1 launched");
-    expect(out).toContain("wave exec measure-1 [measuring dispatched]");
+    expect(out).toMatch(/wave t-new launched .*\[iterate launching\]\n/);
+    expect(out).not.toMatch(/wave t-new .*measuring/);
+    expect(out).toContain("wave exec o/r#1 [measuring dispatched]");
+    expect(out).toContain("wave exec bare-measure [measuring dispatched]");
   } finally {
     server.stop(true);
   }
@@ -175,11 +193,13 @@ test("a resident session on a finished wave task is flagged, and the card lists 
   const sess = (cwd: string, wave: any) => ({ pid: 1, etime: "1:00", cwd, cmd: "codex", quiet_s: null, closable: false, wave });
   const out = render({
     name: "rog", wol: false,
-    wave: {
-      tasks: [{ wave: "w1", task: "live", issue: "o/r#6", repository: "o/r", pr: null, state: "launched" }],
-      visiting: [],
-      executions: [{ request_id: "r1", wave: "w1", issue: "o/r#6", kind: "measurement", state: "dispatched", standing: false }],
-    },
+    wave: machineWaveView({
+      tasks: parseBoard(board("w1", [["live", { agent_host: "rog-nv-linux", issue: "o/r#6", repository: "o/r", state: "launched" }]]))!.tasks,
+      executions: parseExecutions(JSON.stringify([
+        { request_id: "r1", state: "dispatched", request: { wave: "w1", issue: "o/r#6", kind: "measurement", execution_host: "rog-nv-linux" } },
+        { request_id: "r-old", state: "dispatched", request: { wave: "w0", issue: "o/r#6", kind: "correctness", execution_host: "rog-nv-linux" } },
+      ])),
+    } as any, machines, "rog"),
     endpoints: { linux: { ok: true, fetched_at: new Date().toISOString(), data: { sessions: { codex: [
       sess("/w/done", { wave: "w1", task: "done", pr: "5", state: "merged #5 at abc", terminal: true }),
       sess("/w/live", { wave: "w1", task: "live", pr: null, state: "launched", terminal: false }),
@@ -191,4 +211,9 @@ test("a resident session on a finished wave task is flagged, and the card lists 
   expect(out).toContain(`class="wave"`);
   expect(out).toContain("https://github.com/o/r/issues/6");
   expect(out).toContain(`class="xtag measurement"`);
+  // The old wave's reservation for the same issue is its own row, not the task's.
+  const liveRow = out.split(`<div class="wrow"`).find((r: string) => r.includes(`class="task">live<`))!;
+  expect(liveRow).toContain("measuring");
+  expect(liveRow).not.toContain("r-old");
+  expect(out).toMatch(/r-old \(dispatched\)/);
 });

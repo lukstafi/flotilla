@@ -150,15 +150,25 @@ export function machineForBox(machines: MachineLike[], box: string | null): stri
   return machines.find((m) => m.name === box || m.endpoints.some((e) => e.host === box))?.name ?? null;
 }
 
+// Whether a reservation is this task's: the same issue, and the same wave when
+// the reservation names one (an issue retried in a later wave is another task).
+// A reservation with no issue belongs to no task.
+export const reservationOf = (t: WaveTask, x: WaveExecution) =>
+  !!x.issue && x.issue === t.issue && (!x.wave || x.wave === t.wave);
+
 // What one machine is doing for the waves: tasks whose agent runs there, tasks
-// that only execute there, and the reservations held on it.
+// that only execute there, and the reservations held on it. The pairing is done
+// here, once, so the dashboard and the CLI only render it: each task carries its
+// reservations, and `unmatched` holds the ones no listed task owns.
 export function machineWaveView(snap: WavesSnapshot | null, machines: MachineLike[], machine: string) {
   if (!snap) return null;
   const here = (box: string | null) => machineForBox(machines, box) === machine;
-  const tasks = snap.tasks.filter((t) => here(t.agent_host));
-  const visiting = snap.tasks.filter((t) => !here(t.agent_host) && t.exec_hosts.some(here));
   const executions = snap.executions.filter((x) => here(x.execution_host));
-  return tasks.length || visiting.length || executions.length ? { tasks, visiting, executions } : null;
+  const withOwn = (t: WaveTask) => ({ ...t, executions: executions.filter((x) => reservationOf(t, x)) });
+  const tasks = snap.tasks.filter((t) => here(t.agent_host)).map(withOwn);
+  const visiting = snap.tasks.filter((t) => !here(t.agent_host) && t.exec_hosts.some(here)).map(withOwn);
+  const unmatched = executions.filter((x) => ![...tasks, ...visiting].some((t) => reservationOf(t, x)));
+  return tasks.length || visiting.length || executions.length ? { tasks, visiting, executions, unmatched } : null;
 }
 
 // Tasks on boxes no machine in the config answers to, so they are not lost.

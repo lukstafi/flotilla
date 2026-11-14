@@ -155,12 +155,11 @@ for (const m of machines) {
   }
   const v = m.wave;
   if (v) {
-    // One predicate for both paths: a reservation with no issue belongs to no task.
-    const sameIssue = (t, x) => !!x.issue && x.issue === t.issue;
-    const mine = (t) => v.executions.filter((x) => sameIssue(t, x));
-    for (const t of v.tasks) console.log(`  wave ${t.task} ${t.state || "–"}  ${t.issue ?? ""}${t.pr ? " pr " + t.pr : ""} ${mine(t).map(execStr).join(" ")}`);
-    for (const t of v.visiting) console.log(`  wave ${t.task} runs here, agent on ${t.agent_host}  ${t.issue ?? ""} ${mine(t).map(execStr).join(" ")}`);
-    for (const x of v.executions.filter((x) => ![...v.tasks, ...v.visiting].some((t) => sameIssue(t, x))))
+    // The server pairs each task with its reservations (waves.ts, reservationOf).
+    const mine = (t) => (t.executions ?? []).map(execStr).join(" ");
+    for (const t of v.tasks) console.log(`  wave ${t.task} ${t.state || "–"}  ${t.issue ?? ""}${t.pr ? " pr " + t.pr : ""} ${mine(t)}`);
+    for (const t of v.visiting) console.log(`  wave ${t.task} runs here, agent on ${t.agent_host}  ${t.issue ?? ""} ${mine(t)}`);
+    for (const x of v.unmatched ?? [])
       console.log(`  wave exec ${x.issue ?? x.request_id} ${execStr(x)}${x.agent_host ? " agent on " + x.agent_host : ""}`);
   }
 }

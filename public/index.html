@@ -253,7 +253,6 @@ function waveTag(w) {
 // worker's standing iteration slot. Its registry state is in the tooltip.
 const execTag = (x) => `<span class="xtag ${esc(x.kind)}" title="${esc(`${x.request_id} (${x.state ?? "?"})\n${x.purpose ?? ""}`)}">${
   esc(x.kind === "measurement" ? "measuring" : x.standing ? "iterate" : "check")}</span>`;
-const sameIssue = (t, x) => x.issue && x.issue === t.issue && (!x.wave || x.wave === t.wave);
 function taskRow(t, execs, note) {
   const issueNo = (t.issue ?? "").split("#")[1];
   const ref = t.pr ? link(ghPr(t.repository, t.pr), `#${t.pr}`, "pull request") : issueNo ? link(ghIssue(t.issue), `#${issueNo}`, t.issue) : "";
@@ -266,10 +265,10 @@ function taskRow(t, execs, note) {
 function renderWave(m) {
   const v = m.wave;
   if (!v) return "";
-  const rows = v.tasks.map((t) => taskRow(t, v.executions.filter((x) => sameIssue(t, x))));
-  rows.push(...v.visiting.map((t) => taskRow(t, v.executions.filter((x) => sameIssue(t, x)), `agent on ${t.agent_host}`)));
-  const shown = [...v.tasks, ...v.visiting];
-  for (const x of v.executions.filter((x) => !shown.some((t) => sameIssue(t, x))))
+  // The server pairs each task with its reservations (waves.ts, reservationOf).
+  const rows = v.tasks.map((t) => taskRow(t, t.executions ?? []));
+  rows.push(...v.visiting.map((t) => taskRow(t, t.executions ?? [], `agent on ${t.agent_host}`)));
+  for (const x of v.unmatched ?? [])
     rows.push(`<div class="wrow"><span class="task">${esc(x.worker ?? "exec")}</span><span class="state">${
       link(ghIssue(x.issue), x.issue ?? x.request_id)}</span>${execTag(x)}<span class="who">${esc(x.agent_host ? "agent on " + x.agent_host : "")}</span></div>`);
   return `<div class="wave"><div class="head">wave</div>${rows.join("")}</div>`;
