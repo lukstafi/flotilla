@@ -32,6 +32,7 @@ alerting, disks, network and temperatures, run [Beszel] or [Netdata] — they ar
 better at it than this will ever be.
 
 [Beszel]: https://beszel.dev
+[Ludics]: https://github.com/lukstafi/ludics
 [Netdata]: https://www.netdata.cloud
 
 ## What it shows
@@ -48,6 +49,10 @@ better at it than this will ever be.
 - **Agent sessions** — title, uptime, working directory, and liveness per
   session. Sessions whose worktree was deleted out from under them are tagged
   **no worktree**; idle ones can be closed from the dashboard.
+- **Issue-wave status** — with a [Ludics] coordinator anchor on the hub, each
+  machine lists the wave tasks whose agents run there and the execution
+  reservations held on it, and each session is tagged with the wave task its
+  worktree belongs to. See [Issue waves](#issue-waves).
 - **Reachability** — a machine whose endpoints all time out renders as
   "unreachable — asleep?" rather than as an error, and its sleep button becomes
   a wake button.
@@ -97,6 +102,7 @@ checkout now holds; its log is wherever the plist's `StandardOutPath` points.
 | `watch.counts` | process names to tally — one `pgrep` each, so a long list is fine |
 | `watch.sessions` | process names to list — a `ps` and a cwd lookup per match, so keep it short |
 | `desktop_store` | Claude Desktop's session directory, if not the macOS default |
+| `waves` | issue-wave status from a Ludics anchor; `false` turns it off (see [Issue waves](#issue-waves)) |
 | `machines[]` | one entry per physical machine, each with one or more endpoints |
 
 The machine carrying a `local` endpoint is the one running the server. Defaults
@@ -218,6 +224,47 @@ Magic packets reliably wake Macs over **Ethernet only**, even with "Wake for
 network access" enabled. A Wi-Fi-only Mac hub is worth pairing with a scheduled
 `pmset` wake.
 
+## Issue waves
+
+[Ludics]' `issue-wave` skill runs one coordinator over a backlog, launching a
+worker per issue on some box, each in its own worktree. Its anchor state knows
+which issue every worker is for, where it runs and whether its PR merged; this
+dashboard knows what is resident. The join adds:
+
+- **A wave strip** over the grid — each wave with active tasks, its `gate*`
+  notes (a box blocked on a login, say), the coordinator lease, and a red
+  **HALTED** while launches are halted.
+- **A wave section per machine** — the board's unfinished tasks whose agent
+  runs there (state, issue or PR link), tasks whose checks only execute there,
+  and the open execution reservations: `measuring` (exclusive), `check`, or a
+  worker's standing `iterate` slot.
+- **A tag per session** — the task of the worktree the session runs in. A
+  **warm** tag means the task merged, was dropped or closed, and the process is
+  still resident: the same disagreement the close button exists for.
+
+It is read-only, and reads only surfaces Ludics documents: the boards
+(`<state>/boards/<wave>.json`), the `COORDINATOR` and `HALT` files, and
+`fleet-worker.sh execution list --active --compact` once per poll round (the
+registry locks its records, so the verb rather than the files). Ludics boxes
+map to machines whose name or endpoint `host` they equal — `rog-nv-linux` is
+`rog`'s endpoint — and a task on a box no machine answers to is shown in the
+strip rather than dropped.
+
+It turns on by itself when the hub holds anchor state at the default path, the
+author's setup. Elsewhere:
+
+```json
+"waves": {
+  "state_dir": "~/.local/state/issue-wave",
+  "fleet_worker": "~/ludics/issue-wave/scripts/fleet-worker.sh",
+  "recent_h": 24
+}
+```
+
+`recent_h` bounds which boards count as current: older boards keep rows that
+never got a final state, so only boards written within it list active tasks.
+Session tags use every board.
+
 ## Agent access
 
 Any agent on any machine can query the JSON directly:
@@ -244,6 +291,13 @@ name → count) and `sessions` (a map of name → array of
 carries `avg.{m1,m5,m15}` moving averages of `cpu_pct` and `gpu_util_pct`, with
 the contributing sample count. History is in memory and resets on restart.
 
+With wave status on, the top-level `waves` carries `coordinator`, `halt`,
+`waves[]` (per board: `wave`/`updated_at`/`tasks`/`active`/`notes`), the active
+`tasks[]`, the open `executions[]`, `unplaced` tasks, and `error`/
+`executions_error`. Each machine carries `wave` (`tasks`/`visiting`/
+`executions`, or `null`), and each session a `wave` of
+`wave`/`task`/`issue`/`pr`/`state`/`terminal`, or `null`.
+
 **Polling pauses when nobody is watching**: after `idle_after_s` without any
 request, measurement stops. Any request — dashboard or agent curl — resumes it;
 the first response after a pause serves the stale cache (check `fetched_at`)
@@ -262,6 +316,7 @@ home LAN — and not to the open internet.
 
 - `server.ts` — the hub: SSH poller, cache, HTML and JSON routes.
 - `power.ts` — native OS routing and cancellable sleep execution.
+- `waves.ts` — read-only issue-wave status from a Ludics anchor.
 - `scripts/setup-linux-power.sh` — optional Linux suspend/Wake-on-LAN setup.
 - `collect/unix.sh` — macOS/Linux/WSL collector (one JSON object on stdout).
 - `collect/windows.ps1` — Windows collector (perf counters).

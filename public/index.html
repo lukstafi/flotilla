@@ -76,7 +76,7 @@
   .sess .spacer { width: 25px; flex: none; }
   .err { font: 12px var(--mono); color: var(--hot); margin-top: 8px; word-break: break-all; }
   .asleepnote { font: 12px var(--mono); color: var(--dim); margin-top: 8px; }
-  .card.asleep .meter, .card.asleep .counts, .card.asleep .sessions { opacity: .45; }
+  .card.asleep .meter, .card.asleep .counts, .card.asleep .sessions, .card.asleep .wave { opacity: .45; }
   .actions { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
   .actions button {
     font: 12px var(--mono); color: var(--dim); background: none;
@@ -86,6 +86,24 @@
   .actions button.cancel { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 50%, transparent); }
   .countdown { font: 12px var(--mono); color: var(--warm); }
   .gpuname { font-size: 11.5px; color: var(--dim); margin-top: -6px; margin-bottom: 6px; }
+  /* Issue-wave status (Ludics): a fleet-wide strip, a section per card, a tag per session. */
+  #waves { font: 12.5px var(--mono); color: var(--dim); margin: -6px 0 16px; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  #waves:empty { display: none; }
+  #waves b { color: var(--accent); font-weight: 600; }
+  #waves .halt, #waves .gate { color: var(--hot); }
+  #waves .stale { color: var(--warm); }
+  #waves a, .wave a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--edge); }
+  .wave { margin-top: 8px; border-top: 1px solid var(--edge); padding-top: 8px; }
+  .wave .head { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 2px; }
+  .wrow { font: 12px var(--mono); padding: 2px 0; display: flex; gap: 8px; align-items: center; white-space: nowrap; overflow: hidden; }
+  .wrow .task { color: var(--accent); min-width: 52px; }
+  .wrow .state { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 6ch; }
+  .wrow .who { color: var(--dim); margin-left: auto; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .wrow a, .xtag { flex: none; }
+  .xtag { font-size: 10px; color: var(--dim); border: 1px solid var(--edge); border-radius: 8px; padding: 0 5px; flex: none; }
+  .xtag.measurement { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 45%, transparent); }
+  .sess .wtag { font-size: 10px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 8px; padding: 0 5px; flex: none; }
+  .sess .wtag.done { color: var(--warm); border-color: color-mix(in srgb, var(--warm) 45%, transparent); }
   #powerlog { margin-top: 20px; color: var(--dim); font-size: 12px; }
   #powerlog summary { cursor: pointer; }
   #powerlog pre { font: 12px var(--mono); color: var(--text); white-space: pre-wrap; margin: 8px 0 0; }
@@ -98,6 +116,7 @@
   <h1>FLOTILLA</h1>
   <div id="meta">loading…</div>
 </header>
+<div id="waves"></div>
 <div id="grid"></div>
 <details id="powerlog"><summary>power clicks (this browser)</summary><pre></pre></details>
 <footer>agents: <code>curl $FLOTILLA_URL/api/fleet</code></footer>
@@ -210,6 +229,72 @@ function tickCountdowns() {
 }
 setInterval(tickCountdowns, 1000);
 
+// ---- Issue-wave status ----------------------------------------------------
+let waves = null;
+const ghIssue = (ref) => {
+  const m = String(ref ?? "").match(/^([\w.-]+\/[\w.-]+)#(\d+)$/);
+  return m ? `https://github.com/${m[1]}/issues/${m[2]}` : null;
+};
+const ghPr = (repo, pr) => repo && pr ? `https://github.com/${repo}/pull/${pr}` : null;
+const link = (href, text, tip) => href
+  ? `<a href="${esc(href)}" target="_blank" rel="noopener"${tip ? ` title="${esc(tip)}"` : ""}>${esc(text)}</a>` : esc(text);
+// "merged #1145 at 0ad58409d88e" → "merged #1145": the tag only needs the verdict.
+const shortState = (w) => {
+  const head = (w.state || "?").split(/[\s;:(]/)[0].toLowerCase();
+  return w.pr ? `${head} #${w.pr}` : head;
+};
+function waveTag(w) {
+  if (!w) return "";
+  const tip = `${w.wave} ${w.task}${w.issue ? " · " + w.issue : ""}\n${w.state || "(no state)"}` +
+    (w.terminal ? "\nthe wave task is finished; this session is still resident" : "");
+  return `<span class="wtag ${w.terminal ? "done" : ""}" title="${esc(tip)}">${esc(w.task)} ${esc(shortState(w))}</span>`;
+}
+// A reservation on the box: an exclusive measurement, a one-off check, or a
+// worker's standing iteration slot. Its registry state is in the tooltip.
+const execTag = (x) => `<span class="xtag ${esc(x.kind)}" title="${esc(`${x.request_id} (${x.state ?? "?"})\n${x.purpose ?? ""}`)}">${
+  esc(x.kind === "measurement" ? "measuring" : x.standing ? "iterate" : "check")}</span>`;
+const sameIssue = (t, x) => x.issue && x.issue === t.issue && (!x.wave || x.wave === t.wave);
+function taskRow(t, execs, note) {
+  const issueNo = (t.issue ?? "").split("#")[1];
+  const ref = t.pr ? link(ghPr(t.repository, t.pr), `#${t.pr}`, "pull request") : issueNo ? link(ghIssue(t.issue), `#${issueNo}`, t.issue) : "";
+  const who = note ?? "";
+  const tip = [t.wave, t.issue, t.state || "(no state)", [t.transport, t.kind, t.model].filter(Boolean).join(" "), t.worktree].filter(Boolean).join("\n");
+  return `<div class="wrow" title="${esc(tip)}">
+    <span class="task">${esc(t.task)}</span><span class="state">${esc(t.state || "–")}</span>${ref}
+    ${execs.map(execTag).join("")}<span class="who">${esc(who)}</span></div>`;
+}
+function renderWave(m) {
+  const v = m.wave;
+  if (!v) return "";
+  const rows = v.tasks.map((t) => taskRow(t, v.executions.filter((x) => sameIssue(t, x))));
+  rows.push(...v.visiting.map((t) => taskRow(t, v.executions.filter((x) => sameIssue(t, x)), `agent on ${t.agent_host}`)));
+  const shown = [...v.tasks, ...v.visiting];
+  for (const x of v.executions.filter((x) => !shown.some((t) => sameIssue(t, x))))
+    rows.push(`<div class="wrow"><span class="task">${esc(x.worker ?? "exec")}</span><span class="state">${
+      link(ghIssue(x.issue), x.issue ?? x.request_id)}</span>${execTag(x)}<span class="who">${esc(x.agent_host ? "agent on " + x.agent_host : "")}</span></div>`);
+  return `<div class="wave"><div class="head">wave</div>${rows.join("")}</div>`;
+}
+const hhmm = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "?";
+function renderWaves() {
+  const el = document.getElementById("waves");
+  if (!waves) { el.innerHTML = ""; return; }
+  const parts = [];
+  if (waves.error) parts.push(`<span class="stale">waves: ${esc(waves.error)}</span>`);
+  if (waves.halt) parts.push(`<span class="halt" title="${esc(waves.halt)}">HALTED: launches refused</span>`);
+  for (const w of waves.waves.filter((w) => w.active)) {
+    parts.push(`<span title="updated ${esc(w.updated_at)}"><b>${esc(w.wave)}</b> ${w.active} active / ${w.tasks}</span>`);
+    for (const [k, note] of Object.entries(w.notes ?? {}))
+      if (/^gate/.test(k)) parts.push(`<span class="gate" title="${esc(w.wave)} ${esc(k)}">${esc(note)}</span>`);
+  }
+  if (!parts.length && !waves.error) parts.push(`no active waves`);
+  if (waves.coordinator && waves.waves.some((w) => w.active))
+    parts.push(`<span title="${esc(waves.coordinator.host)}">coordinator ${esc((waves.coordinator.host ?? "?").split("/")[0])} since ${hhmm(waves.coordinator.since)}</span>`);
+  for (const t of waves.unplaced ?? [])
+    parts.push(`<span title="${esc(t.state)}">${esc(t.task)} on ${esc(t.agent_host ?? "?")} (not in config): ${esc(t.state || "–")}</span>`);
+  if (waves.executions_error) parts.push(`<span class="stale" title="${esc(waves.executions_error)}">reservations stale</span>`);
+  el.innerHTML = parts.join("");
+}
+
 const dur = (s) =>
   s == null ? "" : s >= 86400 ? `${Math.floor(s / 86400)}d` : s >= 3600 ? `${Math.floor(s / 3600)}h` : s >= 60 ? `${Math.floor(s / 60)}m` : `${s}s`;
 // A session the desktop cannot vouch for reads as active — unknown is never
@@ -251,7 +336,7 @@ function sessionRow(machine, s) {
   const active = isActive(s);
   const key = `${machine}/${s.id}/${s.pid}`;
   const armed = (closeArmed[key] ?? 0) > Date.now();
-  const label = s.title || shortCwd(s.cwd) || s.cmd;
+  const label = s.title || (s.wave && s.cwd ? s.cwd.split("/").filter(Boolean).pop() : shortCwd(s.cwd)) || s.cmd;
   const tip = [s.title, s.branch && `branch: ${s.branch}`, s.cwd, s.cmd].filter(Boolean).join("\n");
   const gone = s.cwd_deleted ? `<span class="gone" title="the working directory no longer exists">no worktree</span>` : "";
   const quiet = active ? "" : `<span class="quiet" title="no activity recorded by Claude Desktop for ${dur(s.quiet_s)}">idle ${dur(s.quiet_s)}</span>`;
@@ -263,7 +348,7 @@ function sessionRow(machine, s) {
   return `<div class="sess ${active ? "" : "idle"}">
     <span class="dot ${active ? "on" : ""}" title="${active ? "active" : "idle for " + dur(s.quiet_s)}"></span>
     <span class="agent ${s.agent}">${s.agent}</span>
-    <span class="cwd" title="${esc(tip)}">${esc(label)}</span>${gone}
+    <span class="cwd" title="${esc(tip)}">${esc(label)}</span>${gone}${waveTag(s.wave)}
     <span class="etime">${esc(s.etime)}</span>${quiet}${tail}
   </div>`;
 }
@@ -317,6 +402,7 @@ function renderMachine(m) {
   sessions.sort((a, b) => (isActive(a) === isActive(b) ? (b.quiet_s ?? 0) - (a.quiet_s ?? 0) : isActive(a) ? -1 : 1));
   if (sessions.length)
     html += `<div class="sessions">` + sessions.map((s) => sessionRow(m.name, s)).join("") + `</div>`;
+  html += renderWave(m);
   // Endpoints that time out read as "asleep", not as errors; real failures stay loud.
   const down = eps.filter(([, ep]) => !ep.ok);
   const allDown = down.length === eps.length;
@@ -365,6 +451,8 @@ async function refresh() {
     sleepStatus = fleet.sleep_status ?? {};
     idleThreshold = fleet.session_idle_s ?? 3600;
     watch = fleet.watch ?? { counts: [], sessions: [] };
+    waves = fleet.waves ?? null;
+    renderWaves();
     document.getElementById("grid").innerHTML = fleet.machines.map(renderMachine).join("");
     if (Date.now() > flashUntil)
       document.getElementById("meta").textContent =
