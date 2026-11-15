@@ -18,6 +18,7 @@
 import { dirname, join } from "path";
 import { selectSleepRoute, sleepCommand, runCommand, SleepController } from "./power";
 import { WaveReader, machineWaveView, unplacedTasks, type WavesConfig } from "./waves";
+import { runBounded, killLiveGroups } from "./run";
 import { homedir } from "os";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
 
@@ -251,20 +252,11 @@ async function pollEndpoint(machine: string, ep: EndpointConfig): Promise<void> 
   st.attempted_at = new Date().toISOString();
   const started = Date.now();
   try {
-    const proc = Bun.spawn(collectorCommand(ep), {
-      stdin: await collectorStdin(ep),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; proc.kill(); }, config.ssh_timeout_ms);
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    clearTimeout(timer);
-    if (timedOut) throw new Error("Collector connection or command timed out");
+    // The deadline bounds the whole read: every endpoint's poll shares pollAll()'s
+    // promise, so one stalled collector would otherwise hold up every later round.
+    const run = await runBounded(collectorCommand(ep), { stdin: await collectorStdin(ep), timeoutMs: config.ssh_timeout_ms });
+    if (run.timedOut) throw new Error("Collector connection or command timed out");
+    const { out: stdout, err: stderr, code: exitCode } = run;
     st.duration_ms = Date.now() - started;
     // PowerShell may emit banners/warnings around the payload; take the JSON line.
     const jsonLine = stdout.split("\n").find((l) => l.trimStart().startsWith("{"));
@@ -399,13 +391,12 @@ async function closeSession(
   const argv = ep.local
     ? ["sh", CLOSE_SCRIPT, String(pid), want]
     : ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", ep.host!, `sh -s -- ${pid} ${want}`];
-  const proc = Bun.spawn(argv, {
-    stdin: ep.local ? undefined : Bun.file(CLOSE_SCRIPT),
-    stdout: "pipe", stderr: "pipe",
-  });
-  const [out, err, code] = await Promise.all([
-    new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
-  ]);
+  const run = await runBounded(argv, { stdin: ep.local ? undefined : Bun.file(CLOSE_SCRIPT), timeoutMs: config.ssh_timeout_ms });
+  if (run.timedOut) {
+    console.error(`flotilla: close ${m.name}/${epId} pid ${pid} timed out after ${config.ssh_timeout_ms} ms`);
+    return { status: 504, body: { error: `close command timed out after ${config.ssh_timeout_ms} ms` } };
+  }
+  const { out, err, code } = run;
   if (code !== 0) {
     console.error(`flotilla: close ${m.name}/${epId} pid ${pid} failed (${code}): ${err.trim()}`);
     const reason = code === 3 ? "process no longer matches the session" : code === 4 ? "process is already gone" : err.trim().slice(0, 200);
@@ -473,6 +464,11 @@ function fleetSnapshot() {
 }
 
 const indexHtml = Bun.file(join(ROOT, "public", "index.html"));
+
+// Subprocesses run in their own process groups (run.ts), out of reach of a
+// signal to ours; end them with the server rather than leave them behind.
+for (const [sig, n] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGHUP", 1]] as const)
+  process.on(sig, () => { killLiveGroups(); process.exit(128 + n); });
 
 const server = Bun.serve({
   port: config.port,

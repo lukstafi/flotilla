@@ -1,3 +1,5 @@
+import { runBounded } from "./run";
+
 // Sleep routes follow the currently observed OS, never the endpoint's nickname.
 export interface Endpoint {
   id: string;
@@ -83,16 +85,8 @@ exec pmset sleepnow`;
 }
 
 export async function runCommand(command: Command, timeoutMs = 30_000): Promise<CommandResult> {
-  const proc = Bun.spawn(command.argv, { stdin: command.stdin === undefined ? "ignore" : Buffer.from(command.stdin),
-    stdout: "pipe", stderr: "pipe" });
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; proc.kill("SIGKILL"); }, timeoutMs);
-  try {
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
-    ]);
-    return { code, stdout, stderr, timedOut };
-  } finally { clearTimeout(timer); }
+  const run = await runBounded(command.argv, { stdin: command.stdin === undefined ? undefined : Buffer.from(command.stdin), timeoutMs });
+  return { code: run.code ?? -1, stdout: run.out, stderr: run.err, timedOut: run.timedOut };
 }
 
 // An accepted command is not proof of sleeping. An SSH disconnect can mean it
