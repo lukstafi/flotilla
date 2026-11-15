@@ -119,6 +119,25 @@ test("a held run lock and lane lock read as an active run and a held box; releas
   expect(readFileSync(join(dir, "lab", "rog.lock"), "utf8")).toBe(`ocannl sweep ${RUN} (pid 1, since ${RUN})\n`);
 });
 
+test("a --slow run stays slow when a variant unit records slow=0", () => {
+  const slowRow = (box: string, backend: string, slow: string) =>
+    [RUN, box, backend, "abc1234", "pass", "60", "<all>", slow, "/l", "forced"].join("\t");
+  const rows = parseHistory([HEADER, slowRow("m4-max", "cc", "1"), slowRow("m4-max", "cc-outlined", "0")].join("\n"));
+  expect(latestRun(rows, [], false, () => null, place)!.slow).toBe(true);
+  expect(latestRun(parseHistory([HEADER, slowRow("m4-max", "cc", "0")].join("\n")), [], false, () => null, place)!.slow).toBe(false);
+});
+
+test("a host without lsof reports the locks unknown and still publishes the run", async () => {
+  const { dir } = fixture();
+  const reader = new SweepReader({
+    state_dir: join(dir, "state"), run_lock: join(dir, "wt", "sweep.lock"), lab_lock_dir: join(dir, "lab"),
+    local_box_file: join(dir, "local-box"), lsof: join(dir, "no-such-lsof"),
+  }, "/home", machines);
+  await reader.refresh(); // resolves: a launch failure must not reject the shared poll round
+  expect(reader.snapshot!.locks_error).toContain("cannot run");
+  expect(reader.snapshot!.run).toMatchObject({ stamp: RUN, active: false });
+});
+
 test("a host without sweep history reports it instead of failing", async () => {
   const reader = new SweepReader({ state_dir: "/nonexistent/sweep" }, "/home", machines);
   await reader.refresh();

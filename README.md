@@ -310,9 +310,13 @@ It turns on by itself when `~/.ocannl-sweep/history.tsv` exists. Elsewhere:
   "state_dir": "~/.ocannl-sweep",
   "run_lock": "~/ocannl-staging-worktrees/sweep.lock",
   "lab_lock_dir": "~/.local/state/wake-lab",
-  "local_box_file": "~/.config/ocannl-sweep/local-box"
+  "local_box_file": "~/.config/ocannl-sweep/local-box",
+  "lsof": "lsof"
 }
 ```
+
+A hub without `lsof` still shows each run's results, with "lock holders
+unknown" in place of activity: units with no row then read as `died`.
 
 ## Agent access
 

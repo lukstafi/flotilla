@@ -35,6 +35,7 @@ export interface SweepConfig {
   run_lock?: string;       // ~/ocannl-staging-worktrees/sweep.lock
   lab_lock_dir?: string;   // ~/.local/state/wake-lab
   local_box_file?: string; // ~/.config/ocannl-sweep/local-box: the hub's own box id (m4-max)
+  lsof?: string;           // the lsof to ask, for a host where it is not on PATH; lsof
   timeout_ms?: number;     // bound on the lsof call; 10000
 }
 
@@ -159,7 +160,9 @@ export function latestRun(rows: SweepRow[], logs: string[], active: boolean,
   const any = done[0];
   return {
     stamp, started_at: stampTime(stamp), active, units,
-    ref: any?.ref || null, slow: done.length ? done.every((r) => r.slow) : false,
+    // Any slow row makes it a --slow run: its variant units (cc-outlined, …)
+    // record slow=0 by design, since they do not run @slow.
+    ref: any?.ref || null, slow: done.some((r) => r.slow),
   };
 }
 
@@ -183,6 +186,7 @@ export class SweepReader {
   private readonly labLockDir: string;
   private readonly localBoxFile: string;
   private readonly timeoutMs: number;
+  private readonly lsof: string;
   private history: { mtime: number; rows: SweepRow[] } | null = null;
   private refreshing: Promise<void> | null = null;
   snapshot: SweepSnapshot | null = null;
@@ -194,6 +198,7 @@ export class SweepReader {
     this.labLockDir = expand(cfg.lab_lock_dir ?? "~/.local/state/wake-lab");
     this.localBoxFile = expand(cfg.local_box_file ?? "~/.config/ocannl-sweep/local-box");
     this.timeoutMs = cfg.timeout_ms ?? 10_000;
+    this.lsof = cfg.lsof ?? "lsof";
   }
 
   refresh(): Promise<void> {
@@ -224,10 +229,16 @@ export class SweepReader {
     // One lsof for every lock. It exits 1 when ANY named file is not open -- the
     // usual case, with the rest listed on stdout -- so 0 and 1 are both answers.
     let open = new Set<string>(), locksError: string | null = null;
-    const r = await runBounded(["lsof", "-F", "n", "--", this.runLock, ...labLocks], { timeoutMs: this.timeoutMs });
-    if (r.timedOut) locksError = "lsof timed out";
-    else if (r.code === 0 || r.code === 1) open = openPaths(r.out);
-    else locksError = `lsof exit ${r.code}: ${r.err.trim().slice(0, 200)}`;
+    // A host without lsof (a minimal Linux hub) cannot launch it at all: that is
+    // this round's locks_error, never a rejection of the poll round it shares.
+    try {
+      const r = await runBounded([this.lsof, "-F", "n", "--", this.runLock, ...labLocks], { timeoutMs: this.timeoutMs });
+      if (r.timedOut) locksError = "lsof timed out";
+      else if (r.code === 0 || r.code === 1) open = openPaths(r.out);
+      else locksError = `lsof exit ${r.code}: ${r.err.trim().slice(0, 200)}`;
+    } catch (err) {
+      locksError = `cannot run ${this.lsof}: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`;
+    }
     // lsof names a file by its resolved path (macOS's /var is /private/var), so
     // a lock is compared through its own resolved path.
     const real = (p: string) => { try { return realpathSync(p); } catch { return p; } };
