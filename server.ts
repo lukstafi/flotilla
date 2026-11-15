@@ -18,6 +18,7 @@
 import { dirname, join } from "path";
 import { selectSleepRoute, sleepCommand, runCommand, SleepController } from "./power";
 import { WaveReader, machineWaveView, unplacedTasks, type WavesConfig } from "./waves";
+import { SweepReader, machineSweepView, type SweepConfig } from "./sweep";
 import { runBounded, killLiveGroups } from "./run";
 import { machinePayload, type ViewSettings } from "./payload";
 import { homedir } from "os";
@@ -52,6 +53,7 @@ interface FleetConfig {
   desktop_store?: string; // Claude Desktop's session directory, if not the macOS default
   watch?: WatchConfig;
   waves?: WavesConfig | false; // Ludics issue-wave status; see waves.ts
+  sweep?: SweepConfig | false; // the cross-machine test sweep's activity; see sweep.ts
   machines: MachineConfig[];
 }
 
@@ -78,6 +80,12 @@ const WATCH_SESSIONS = config.watch?.sessions ?? ["claude", "codex"];
 const waveReader = config.waves === false ? null
   : config.waves || existsSync(join(homedir(), ".local", "state", "issue-wave", "boards"))
     ? new WaveReader(config.waves || {}, homedir(), config.machines) : null;
+
+// Sweep activity likewise: on when configured, or when this host holds the
+// sweep's history at the default place; `"sweep": false` turns it off.
+const sweepReader = config.sweep === false ? null
+  : config.sweep || existsSync(join(homedir(), ".ocannl-sweep", "history.tsv"))
+    ? new SweepReader(config.sweep || {}, homedir(), config.machines) : null;
 
 const UNIX_SCRIPT = join(ROOT, "collect", "unix.sh");
 const WIN_SCRIPT = join(ROOT, "collect", "windows.ps1");
@@ -416,6 +424,7 @@ function pollAll(): Promise<void> {
   polling = Promise.all([
     ...config.machines.flatMap((m) => m.endpoints.map((e) => pollEndpoint(m.name, e))),
     waveReader?.refresh(),
+    sweepReader?.refresh(),
   ]).then(() => {}).finally(() => { polling = null; });
   return polling;
 }
@@ -437,6 +446,7 @@ function machineSnapshot(m: MachineConfig) {
     sleep_status: sleepController.status.get(m.name) ?? null,
     wol: !!m.wol,
     wave: machineWaveView(waveReader?.snapshot ?? null, config.machines, m.name),
+    sweep: machineSweepView(sweepReader?.snapshot ?? null, m.name),
     endpoints: Object.fromEntries(
       m.endpoints.map((e) => {
         const key = epKey(m.name, e.id);
@@ -461,6 +471,8 @@ function fleetSnapshot() {
     ...VIEW,
     waves: waveReader?.snapshot
       ? { ...waveReader.snapshot, unplaced: unplacedTasks(waveReader.snapshot, config.machines) } : null,
+    // Not `sweep`: that is each machine's own view, and /api/fleet/<machine> serves one.
+    sweep_status: sweepReader?.snapshot ?? null,
     machines: config.machines.map(machineSnapshot),
   };
 }
