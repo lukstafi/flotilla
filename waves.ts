@@ -18,6 +18,7 @@
 
 import { join } from "path";
 import { readFileSync, readdirSync, statSync } from "fs";
+import { runBounded } from "./run";
 
 export interface WavesConfig {
   state_dir?: string;    // the anchor's issue-wave state; ~/.local/state/issue-wave
@@ -268,26 +269,10 @@ export class WaveReader {
 
   private async readExecutions(): Promise<void> {
     try {
-      // Its own process group, so the deadline ends every process the verb
-      // started; and the deadline races the reads, since a descendant that
-      // escaped the group would otherwise hold the pipes, and this refresh
-      // shares pollAll()'s promise with every endpoint.
-      const proc = Bun.spawn(["bash", this.fleetWorker, "execution", "list", "--active", "--compact"], {
-        stdout: "pipe", stderr: "pipe", stdin: "ignore", detached: true,
-      });
-      const collected = Promise.all([
-        new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
-      ]);
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), this.timeoutMs); });
-      const result = await Promise.race([collected, deadline]);
-      clearTimeout(timer);
-      if (!result) {
-        try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
-        collected.catch(() => {});
-        throw new Error(`execution list timed out after ${this.timeoutMs} ms`);
-      }
-      const [out, err, code] = result;
+      // Bounded whole (run.ts): this refresh shares pollAll()'s promise with every endpoint.
+      const run = await runBounded(["bash", this.fleetWorker, "execution", "list", "--active", "--compact"], { timeoutMs: this.timeoutMs });
+      if (run.timedOut) throw new Error(`execution list timed out after ${this.timeoutMs} ms`);
+      const { out, err, code } = run;
       if (code !== 0) throw new Error(`execution list exit ${code}: ${(err.trim() || out.trim()).slice(0, 200)}`);
       this.executions = parseExecutions(out.slice(out.indexOf("[")));
       this.executionsError = null;
