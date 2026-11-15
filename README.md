@@ -291,6 +291,11 @@ name → count) and `sessions` (a map of name → array of
 carries `avg.{m1,m5,m15}` moving averages of `cpu_pct` and `gpu_util_pct`, with
 the contributing sample count. History is in memory and resets on restart.
 
+Both routes carry the view settings at the top level: `watch` (the `counts` and
+`sessions` names to tally, as configured) and `session_idle_s` (the quiet time
+after which a Claude session is `closable`). `/api/fleet/<machine>` is that
+machine's entry of `machines[]` plus `updated_at` and these two fields.
+
 With wave status on, the top-level `waves` carries `coordinator`, `halt`,
 `waves[]` (per board: `wave`/`updated_at`/`tasks`/`active`/`notes`), the active
 `tasks[]`, the open `executions[]`, `unplaced` tasks, and `error`/
