@@ -53,6 +53,10 @@ better at it than this will ever be.
   machine lists the wave tasks whose agents run there and the execution
   reservations held on it, and each session is tagged with the wave task its
   worktree belongs to. See [Issue waves](#issue-waves).
+- **Cross-machine sweep** — the latest run of OCANNL's test sweep, one lane
+  per box: each unit's outcome on the card of the machine it ran on, units
+  still running, new failures and fixes against the previous run, and the lab
+  locks held on each box. See [Cross-machine sweep](#cross-machine-sweep).
 - **Reachability** — a machine whose endpoints all time out renders as
   "unreachable — asleep?" rather than as an error, and its sleep button becomes
   a wake button.
@@ -103,6 +107,7 @@ checkout now holds; its log is wherever the plist's `StandardOutPath` points.
 | `watch.sessions` | process names to list — a `ps` and a cwd lookup per match, so keep it short |
 | `desktop_store` | Claude Desktop's session directory, if not the macOS default |
 | `waves` | issue-wave status from a Ludics anchor; `false` turns it off (see [Issue waves](#issue-waves)) |
+| `sweep` | cross-machine sweep activity; `false` turns it off (see [Cross-machine sweep](#cross-machine-sweep)) |
 | `machines[]` | one entry per physical machine, each with one or more endpoints |
 
 The machine carrying a `local` endpoint is the one running the server. Defaults
@@ -265,6 +270,50 @@ author's setup. Elsewhere:
 never got a final state, so only boards written within it list active tasks.
 Session tags use every board.
 
+## Cross-machine sweep
+
+OCANNL's `tools/sweep.sh`, run daily by Ludics' `ocannl-cross-machine-sweep`
+routine, is the only coverage its non-CI backends get: cc and metal on the Mac,
+cuda on rog, hip and multidev_cc on minix, and hip again on tuf. Each box's
+units run as one **lane**, the lanes concurrently, so a run is hours of
+activity spread over the fleet. Everything the sweep leaves is on the machine
+that launched it (the hub, in the author's fleet), and the dashboard reads it
+there:
+
+- **A sweep line** in the strip: the latest run, running for how long or when it
+  ran, the revision, a tally of outcomes, and every **new** failure by name.
+- **A sweep section per machine**: each unit of that run on the box it ran on —
+  its outcome and duration, `new` where a pass turned into a failure, `fixed`
+  for the reverse, or `running` with how long its log has been **quiet**, the
+  one sign of a stalled unit there is. A unit whose run ended without recording
+  it reads `died`.
+- **Lab locks**: wake-lab's lane lock (a remote lane using the box) and hold
+  lock (`wake-lab --hold`, a VM that must not be destroyed), with the holder's
+  own description, while someone has them open.
+
+The sources are the sweep's `history.tsv` (read by column name), its log names
+(a log with no row is a unit in flight), and its flocks: the run lock beside the
+sweep worktree and the lane and hold locks in wake-lab's lock directory. The
+locks are never taken, not even shared for an instant — a sweep starting in that
+instant would refuse to run. Whether one is held is asked of `lsof`, once per
+poll round, so "held" also covers a lane waiting for it.
+
+A box maps to the machine of the same name or endpoint host stem (`rog-nv` is
+`rog`), and the hub's own box id is read from the sweep's `local-box` file. A
+unit under a name the history has never recorded shows only once its row is
+written, since the history is what tells a unit's log from a diagnostic leg's.
+
+It turns on by itself when `~/.ocannl-sweep/history.tsv` exists. Elsewhere:
+
+```json
+"sweep": {
+  "state_dir": "~/.ocannl-sweep",
+  "run_lock": "~/ocannl-staging-worktrees/sweep.lock",
+  "lab_lock_dir": "~/.local/state/wake-lab",
+  "local_box_file": "~/.config/ocannl-sweep/local-box"
+}
+```
+
 ## Agent access
 
 Any agent on any machine can query the JSON directly:
@@ -303,6 +352,14 @@ With wave status on, the top-level `waves` carries `coordinator`, `halt`,
 `executions`, or `null`), and each session a `wave` of
 `wave`/`task`/`issue`/`pr`/`state`/`terminal`, or `null`.
 
+With sweep activity on, the top-level `sweep_status` carries `run` (`stamp`,
+`started_at`, `active`, `ref`, `slow`, `units[]`), the held `locks[]`, and
+`error`/`locks_error`. Each unit has `box`/`backend`/`machine`, `state`
+(`done`, `running`, `died`), `outcome` and its `class`, `seconds`,
+`last_output_at`, the `previous` run's outcome and a `change` (`new-fail`,
+`fixed`, or `null`). Each machine carries `sweep` (`run`/`active`/`units`/
+`locks`, or `null`) — the same units, those that ran on it.
+
 **Polling pauses when nobody is watching**: after `idle_after_s` without any
 request, measurement stops. Any request — dashboard or agent curl — resumes it;
 the first response after a pause serves the stale cache (check `fetched_at`)
@@ -322,6 +379,7 @@ home LAN — and not to the open internet.
 - `server.ts` — the hub: SSH poller, cache, HTML and JSON routes.
 - `power.ts` — native OS routing and cancellable sleep execution.
 - `waves.ts` — read-only issue-wave status from a Ludics anchor.
+- `sweep.ts` — read-only cross-machine sweep activity.
 - `scripts/setup-linux-power.sh` — optional Linux suspend/Wake-on-LAN setup.
 - `collect/unix.sh` — macOS/Linux/WSL collector (one JSON object on stdout).
 - `collect/windows.ps1` — Windows collector (perf counters).

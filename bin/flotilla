@@ -113,6 +113,21 @@ if (waves) {
   for (const t of waves.unplaced ?? []) console.log(`  ${t.task} on ${t.agent_host} (not in config): ${t.state}`);
   if (waves.executions_error) console.log(`  ! reservations stale: ${waves.executions_error}`);
 }
+const sweep = payload.sweep_status; // the fleet's; a machine's own view is machines[].sweep
+if (sweep?.error) console.log(`sweep: ${sweep.error}`);
+if (sweep?.run) {
+  const r = sweep.run, tally = {};
+  for (const u of r.units) { const k = u.state === "done" ? u.class : u.state; tally[k] = (tally[k] ?? 0) + 1; }
+  console.log(`sweep ${r.stamp}${r.active ? " RUNNING" : ""}${r.ref ? " @" + r.ref : ""}${r.slow ? " --slow" : ""}  ${
+    Object.entries(tally).map(([k, n]) => `${n} ${k}`).join(", ")}`);
+  for (const u of r.units.filter((u) => u.change === "new-fail")) console.log(`  ! new failure: ${u.box} ${u.backend} (was ${u.previous?.outcome})`);
+  for (const u of r.units.filter((u) => !u.machine)) console.log(`  ${u.box} ${u.backend} (not in config): ${u.outcome ?? u.state}`);
+  if (sweep.locks_error) console.log(`  ! lock holders unknown: ${sweep.locks_error}`);
+}
+const unitStr = (u) => u.state === "done"
+  ? `${u.outcome}${u.seconds != null ? ` ${Math.round(u.seconds / 60)}m` : ""}${u.change ? ` [${u.change}]` : ""}`
+  : u.state === "running" ? `running (log grew ${u.last_output_at ? Math.round((Date.now() - Date.parse(u.last_output_at)) / 60000) + "m ago" : "?"})`
+  : "died with its run";
 const execStr = (x) => `[${x.kind === "measurement" ? "measuring" : x.standing ? "iterate" : "check"} ${x.state}]`;
 const pct = (v) => (v == null ? "–" : `${Math.round(v)}%`);
 
@@ -161,5 +176,10 @@ for (const m of machines) {
     for (const t of v.visiting) console.log(`  wave ${t.task} runs here, agent on ${t.agent_host}  ${t.issue ?? ""} ${mine(t)}`);
     for (const x of v.unmatched ?? [])
       console.log(`  wave exec ${x.issue ?? x.request_id} ${execStr(x)}${x.agent_host ? " agent on " + x.agent_host : ""}`);
+  }
+  const sw = m.sweep;
+  if (sw) {
+    for (const u of sw.units) console.log(`  sweep ${u.backend} ${unitStr(u)}`);
+    for (const l of sw.locks) console.log(`  sweep ${l.kind} lock: ${l.holder}`);
   }
 }
