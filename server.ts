@@ -19,6 +19,7 @@ import { dirname, join } from "path";
 import { selectSleepRoute, sleepCommand, runCommand, SleepController } from "./power";
 import { WaveReader, machineWaveView, unplacedTasks, type WavesConfig } from "./waves";
 import { runBounded, killLiveGroups } from "./run";
+import { machinePayload, type ViewSettings } from "./payload";
 import { homedir } from "os";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
 
@@ -446,6 +447,8 @@ function machineSnapshot(m: MachineConfig) {
   };
 }
 
+const VIEW: ViewSettings = { session_idle_s: SESSION_IDLE_S, watch: { counts: WATCH_COUNTS, sessions: WATCH_SESSIONS } };
+
 function fleetSnapshot() {
   return {
     updated_at: new Date().toISOString(),
@@ -455,8 +458,7 @@ function fleetSnapshot() {
     sleep_preparing: [...sleepPreparations.keys()],
     sleep_status: Object.fromEntries(sleepController.status),
     sleep_delay_s: SLEEP_DELAY_S,
-    session_idle_s: SESSION_IDLE_S,
-    watch: { counts: WATCH_COUNTS, sessions: WATCH_SESSIONS },
+    ...VIEW,
     waves: waveReader?.snapshot
       ? { ...waveReader.snapshot, unplaced: unplacedTasks(waveReader.snapshot, config.machines) } : null,
     machines: config.machines.map(machineSnapshot),
@@ -539,7 +541,7 @@ const server = Bun.serve({
       if (!m) return Response.json({ error: `unknown machine: ${single[1]}` }, { status: 404 });
       const woke = noteClientActivity();
       if (woke && url.searchParams.get("fresh")) await woke;
-      return Response.json({ updated_at: new Date().toISOString(), ...machineSnapshot(m) });
+      return Response.json(machinePayload(VIEW, machineSnapshot(m)));
     }
     return new Response("not found", { status: 404 });
   },
