@@ -73,7 +73,7 @@ const config: FleetConfig = await Bun.file(CONFIG_PATH).json().catch((err) => {
 // Defaults name what this author runs; nothing here is privileged, and a config
 // that lists cargo and aider instead is a first-class setup.
 const WATCH_COUNTS = config.watch?.counts ?? ["dune"];
-const WATCH_SESSIONS = config.watch?.sessions ?? ["claude", "codex"];
+const WATCH_SESSIONS = config.watch?.sessions ?? ["claude", "codex", "agy"];
 
 // Wave status is on when configured, or when this host holds a Ludics anchor's
 // state at the default place; `"waves": false` turns it off.

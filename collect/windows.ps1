@@ -3,11 +3,12 @@
 #   ssh <host> 'powershell -NoProfile -Command -' < windows.ps1
 # Configuration arrives as $Counts/$Sessions assignments prepended to this script
 # by the server -- "-Command -" refuses positional arguments -- so each is a
-# comma-separated list of process names, defaulted only when nothing was sent:
+# comma-separated list of process names, defaulted only when nothing was sent
+# (an empty list is the config asking for nothing, not for the defaults):
 #   counts    processes worth tallying   (dune, cargo, msbuild, ...)
-#   sessions  processes worth listing    (claude, codex, ...)
-if (-not $Counts)   { $Counts = "dune" }
-if (-not $Sessions) { $Sessions = "claude,codex" }
+#   sessions  processes worth listing    (claude, codex, agy, ...)
+if ($null -eq $Counts)   { $Counts = "dune" }
+if ($null -eq $Sessions) { $Sessions = "claude,codex,agy" }
 $ErrorActionPreference = "SilentlyContinue"
 
 $cpu = [math]::Round((Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue, 1)

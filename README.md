@@ -111,7 +111,7 @@ checkout now holds; its log is wherever the plist's `StandardOutPath` points.
 | `machines[]` | one entry per physical machine, each with one or more endpoints |
 
 The machine carrying a `local` endpoint is the one running the server. Defaults
-name what the author runs (`dune`, `claude`, `codex`); a config listing `cargo`
+name what the author runs (`dune`, `claude`, `codex`, `agy`); a config listing `cargo`
 and `aider` instead is a first-class setup.
 
 Some agents do not run from a binary named after them — Claude Code's remote CLI

@@ -12,6 +12,7 @@ pgrep() {
   case "$*" in
     '-x codex') printf '10\n20\n30\n40\n' ;;
     '-x claude') echo 60 ;;
+    '-x agy') echo 70 ;;
     '-f .claude/remote/ccd-cli/') printf '61\n62\n' ;;
   esac
 }
@@ -26,6 +27,7 @@ exe() {
     60) echo /usr/local/bin/claude ;;
     61) echo /Users/test/.claude/remote/ccd-cli/1.2.3 ;;
     62) echo /bin/sh ;;
+    70) echo /Users/test/.local/bin/agy ;;
   esac
 }
 ps() {
@@ -52,15 +54,20 @@ readlink() {
   esac
 }
 '''
-for agent, expected in [('codex', [10, 20, 21]), ('claude', [60, 61]), ('aider', [])]:
+for agent, expected in [('codex', [10, 20, 21]), ('claude', [60, 61]), ('agy', [70]), ('aider', [])]:
     result = subprocess.check_output(['bash'], input=escape + functions + fixture + f'\nsessions_of {agent}\n', text=True)
     rows = json.loads(result)
     assert [r['pid'] for r in rows] == expected, rows
     if agent == 'codex':
         assert [r['kind'] for r in rows] == ['process', 'app-server', 'app-server']
         assert all(r['cwd'] == '/work/repo' for r in rows)
-print('PASS: CLI, both app bundles, spaces, pgrep omission, deduplication, helpers, IDE, remote Claude, empty list')
+print('PASS: CLI, both app bundles, spaces, pgrep omission, deduplication, helpers, IDE, remote Claude, agy, empty list')
 
 result = subprocess.check_output(['bash'], input=escape + functions + fixture + '\nOS=Linux\nsessions_of claude\n', text=True)
 assert [r['pid'] for r in json.loads(result)] == [60, 61], result
 print('PASS: Linux remote Claude executable paths')
+
+collector = Path(__file__).resolve().parents[1] / 'collect/unix.sh'
+payload = json.loads(subprocess.check_output(['bash', str(collector), '', ''], text=True))
+assert payload['counts'] == {} and payload['sessions'] == {}, payload
+print('PASS: explicitly empty watch lists report nothing')
