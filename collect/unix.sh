@@ -11,8 +11,10 @@
 
 set -u
 
-WATCH_COUNTS="${1:-dune}"
-WATCH_SESSIONS="${2:-claude,codex,agy}"
+# A default stands in only for an absent argument: an empty one is the config
+# asking for nothing, so sessions it did not name are never reported.
+WATCH_COUNTS="${1-dune}"
+WATCH_SESSIONS="${2-claude,codex,agy}"
 
 OS="$(uname -s)"
 HOST="$(hostname -s 2>/dev/null || hostname)"
