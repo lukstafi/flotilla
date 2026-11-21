@@ -4,7 +4,7 @@
 #   ssh <host> "bash -s -- <counts> <sessions>" < unix.sh
 # where both arguments are comma-separated process names from the config:
 #   counts    processes worth tallying   (dune, cargo, make, ninja, tsc, ...)
-#   sessions  processes worth listing    (claude, codex, ...)
+#   sessions  processes worth listing    (claude, codex, agy, ...)
 # Counting is one pgrep; listing costs a ps and a cwd lookup per match, so keep
 # the counts list long and the sessions list short.
 # Every section is best-effort: a failing probe yields null/empty, never a crash.
@@ -12,7 +12,7 @@
 set -u
 
 WATCH_COUNTS="${1:-dune}"
-WATCH_SESSIONS="${2:-claude,codex}"
+WATCH_SESSIONS="${2:-claude,codex,agy}"
 
 OS="$(uname -s)"
 HOST="$(hostname -s 2>/dev/null || hostname)"

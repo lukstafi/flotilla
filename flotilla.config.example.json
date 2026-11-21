@@ -12,7 +12,7 @@
   "//watch": "counts is one pgrep per name (cheap, keep it long); sessions costs a ps and a cwd lookup per match (keep it short).",
   "watch": {
     "counts": ["dune", "cargo", "make", "ninja"],
-    "sessions": ["claude", "codex"]
+    "sessions": ["claude", "codex", "agy"]
   },
 
   "//machines": "One entry per physical machine. A machine with a 'local' endpoint is the one running the server. Dual-boot boxes list both sides: the Windows counter is host-wide truth (it includes the WSL2 VM), the WSL one is shown separately.",
